@@ -1,0 +1,54 @@
+# Dev override — hot reload, exposed ports, source mounted as volumes.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  api:
+    build:
+      target: dev
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./services/api-gateway:/app
+      - ./db/migrations:/migrations:ro
+      # Bind the canonical migrations into the go:embed path. The
+      # Dockerfile copies them at build time, but on hot-reload during
+      # dev we want new SQL files visible to the next `go build`
+      # without rebuilding the image.
+      - ./db/migrations:/app/internal/store/migrations:ro
+
+  collector:
+    build:
+      target: dev
+    volumes:
+      - ./services/collector:/app
+
+  ml:
+    build:
+      target: dev
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./services/ml-service:/app
+
+  frontend:
+    build:
+      target: dev
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_BASE: ${VITE_API_BASE}
+      VITE_WS_BASE: ${VITE_WS_BASE}
+    volumes:
+      - ./frontend:/app
+      - frontend-node-modules:/app/node_modules
+
+  db:
+    ports:
+      - "5432:5432"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+volumes:
+  frontend-node-modules:

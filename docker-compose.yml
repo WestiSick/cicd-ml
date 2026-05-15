@@ -1,0 +1,104 @@
+# Base compose — shared across dev and prod.
+# Use overrides for environment-specific concerns:
+#   dev : docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#   prod: docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.prod up -d
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    restart: unless-stopped
+    environment:
+      POSTGRES_DSN: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?sslmode=disable
+      REDIS_ADDR: ${REDIS_HOST}:${REDIS_PORT}
+      ML_BASE_URL: http://${ML_HOST}:${ML_PORT}
+      API_BIND: ${API_BIND}:${API_PORT}
+      JWT_SECRET: ${JWT_SECRET}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET}
+      PUBLIC_API_BASE: ${PUBLIC_API_BASE}
+      PUBLIC_WS_BASE: ${PUBLIC_WS_BASE}
+      BOOTSTRAP_DEFAULT_MONTHS: ${BOOTSTRAP_DEFAULT_MONTHS}
+      LOG_LEVEL: ${LOG_LEVEL}
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    volumes:
+      - model-artifacts:/var/lib/cicdml/models
+      - thesis-output:/var/lib/cicdml/thesis
+
+  collector:
+    build:
+      context: .
+      dockerfile: services/collector/Dockerfile
+    restart: unless-stopped
+    environment:
+      POSTGRES_DSN: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?sslmode=disable
+      REDIS_ADDR: ${REDIS_HOST}:${REDIS_PORT}
+      LOG_LEVEL: ${LOG_LEVEL}
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  ml:
+    build:
+      context: ./services/ml-service
+    restart: unless-stopped
+    environment:
+      POSTGRES_DSN: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      MODELS_DIR: /var/lib/cicdml/models
+      THESIS_OUTPUT_DIR: /var/lib/cicdml/thesis
+      GATEWAY_INTERNAL_BASE: http://api:8080
+      ML_PORT: ${ML_PORT}
+      LOG_LEVEL: ${LOG_LEVEL}
+    depends_on:
+      db: { condition: service_healthy }
+    volumes:
+      - model-artifacts:/var/lib/cicdml/models
+      # Shared with api-gateway — PNG/PDF figures and CSV exports both
+      # land here so the user finds them at the same host path.
+      - thesis-output:/var/lib/cicdml/thesis
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE: ${VITE_API_BASE}
+        VITE_WS_BASE: ${VITE_WS_BASE}
+
+volumes:
+  pg-data:
+  redis-data:
+  model-artifacts:
+  thesis-output:
+
+networks:
+  default:
+    name: cicdml-net

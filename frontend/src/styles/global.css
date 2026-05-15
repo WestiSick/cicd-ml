@@ -1,0 +1,116 @@
+@import "./tokens.css";
+
+/* Reset — minimal. Modern browsers handle most defaults; we only touch
+ * what actively gets in the way. */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--fs-14);
+  line-height: var(--lh-base);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "cv11", "ss01", "ss03";
+}
+
+body {
+  overscroll-behavior: none;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+input, textarea, select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--text-primary);
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: var(--r-pill);
+  border: 2px solid var(--bg-base);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+/* ---- Mono utilities ---- */
+
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "zero", "ss02";
+}
+
+.caps {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: var(--fs-12);
+  font-weight: 500;
+}
+
+/* ---- Sonner toast overrides (flat / mono / no rounded pills) ---- */
+
+.cm-toast {
+  background: var(--bg-overlay) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: var(--r-6) !important;
+  color: var(--text-primary) !important;
+  font-family: var(--font-sans) !important;
+  font-size: var(--fs-13) !important;
+  box-shadow: none !important;
+  padding: var(--s-3) var(--s-4) !important;
+}
+
+.cm-toast[data-type="success"] {
+  border-left: 2px solid var(--ok) !important;
+}
+.cm-toast[data-type="error"] {
+  border-left: 2px solid var(--err) !important;
+}
+.cm-toast[data-type="warning"] {
+  border-left: 2px solid var(--warn) !important;
+}
+.cm-toast[data-type="info"] {
+  border-left: 2px solid var(--info) !important;
+}
+
+.cm-toast__title {
+  font-weight: 500;
+  font-size: var(--fs-13);
+}
+.cm-toast__desc {
+  color: var(--text-secondary);
+  font-size: var(--fs-12);
+}
+
+/* ---- Focus ring ---- */
+
+:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+  border-radius: var(--r-4);
+}

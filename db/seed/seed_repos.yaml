@@ -1,0 +1,10 @@
+# Default seed repositories used on first bootstrap.
+# Users see these on the /setup onboarding screen and can deselect any.
+repos:
+  - { owner: vitejs,     name: vite }
+  - { owner: prometheus, name: prometheus }
+  - { owner: gin-gonic,  name: gin }
+  - { owner: fastapi,    name: fastapi }
+  - { owner: pandas-dev, name: pandas }
+  - { owner: golang,     name: go }
+  - { owner: pallets,    name: flask }

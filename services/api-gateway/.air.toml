@@ -1,0 +1,18 @@
+root = "."
+tmp_dir = "tmp"
+# poll=true is essential when source is bind-mounted from Windows (or
+# Docker Desktop on macOS): fsnotify events don't always cross the
+# host→container boundary cleanly. Polling adds ~1s latency to hot
+# reloads but guarantees changes are picked up.
+poll = true
+poll_interval = 1000
+
+[build]
+  cmd = "go build -o ./tmp/api ./cmd/api"
+  bin = "./tmp/api"
+  delay = 500
+  exclude_dir = ["tmp", "vendor"]
+  include_ext = ["go"]
+
+[log]
+  time = true

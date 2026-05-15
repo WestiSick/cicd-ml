@@ -1,0 +1,48 @@
+# Env
+.env
+.env.local
+.env.prod
+*.env
+
+# Go
+bin/
+*.exe
+*.test
+*.out
+go.work.sum
+
+# Build-time copy — canonical lives in /db/migrations
+services/api-gateway/internal/store/migrations/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Data
+db/seed/snapshot.sql.gz
+ml/registry/*
+!ml/registry/.gitkeep
+docs/thesis/figures/*
+!docs/thesis/figures/.gitkeep
+docs/thesis/screenshots/*
+!docs/thesis/screenshots/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db

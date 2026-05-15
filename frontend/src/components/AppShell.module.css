@@ -1,0 +1,112 @@
+.shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-rows: var(--topbar-h) 1fr;
+  grid-template-areas:
+    "topbar topbar"
+    "sidebar main";
+  height: 100vh;
+  background: var(--bg-base);
+}
+
+.topbar {
+  grid-area: topbar;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 0 var(--s-4);
+  background: var(--bg-base);
+  z-index: var(--z-topbar);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+  color: var(--text-secondary);
+}
+
+.brandMark {
+  color: var(--text-primary);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.brandSep { color: var(--text-tertiary); }
+.crumb    { color: var(--text-secondary); }
+
+.topbarRight {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.sidebar {
+  grid-area: sidebar;
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  padding: var(--s-3) 0;
+  background: var(--bg-base);
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  padding: 0 var(--s-2);
+}
+
+.navSpacer { flex: 1; }
+
+.navLink {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 6px var(--s-3);
+  font-size: var(--fs-13);
+  color: var(--text-secondary);
+  border-radius: var(--r-6);
+  transition: background var(--t-hover) var(--ease), color var(--t-hover) var(--ease);
+}
+
+.navLink:hover {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+}
+
+.navLinkActive {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.navIcon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-tertiary);
+}
+
+.navLinkActive .navIcon { color: var(--accent); }
+
+.sidebarFooter {
+  padding: var(--s-3) var(--s-4);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-12);
+  color: var(--text-tertiary);
+}
+
+.main {
+  grid-area: main;
+  overflow: auto;
+}
+
+.mainInner {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--s-6) var(--s-6) var(--s-12);
+}
