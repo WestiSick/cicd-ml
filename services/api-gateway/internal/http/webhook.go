@@ -117,14 +117,32 @@ func (s *Server) handleGithubWebhook(w http.ResponseWriter, r *http.Request) {
 			s.ensureCommitForWebhook(r.Context(), owner, name, head.WorkflowRun.HeadSHA)
 
 			if pred, err := s.predictFromWebhook(r.Context(), head.Repository.FullName, head.WorkflowRun.Name, head.WorkflowRun.HeadBranch, head.WorkflowRun.Event, head.WorkflowRun.HeadSHA); err == nil {
-				payload["predicted_sec"] = pred.PredictedSec
+				// Apply per-(repo, workflow) calibration. The factor is
+				// the EMA of historical actual/predicted ratios; it
+				// silently passes through 1.0 when we don't have enough
+				// observations yet (n < MinObservationsForCalibration)
+				// so first-time slices aren't biased by a guess.
+				factor := 1.0
+				calibratedSec := pred.PredictedSec
+				if repo, lookupErr := s.db.LookupRepo(r.Context(), owner, name); lookupErr == nil {
+					factor = s.db.GetCalibrationFactor(r.Context(), repo.ID, head.WorkflowRun.Name)
+					calibratedSec = pred.PredictedSec * factor
+				}
+
+				payload["predicted_sec"] = calibratedSec
+				payload["predicted_raw_sec"] = pred.PredictedSec
+				payload["calibration_factor"] = factor
 				payload["model_id"] = pred.ModelID
 				payload["model_algo"] = pred.ModelAlgo
-				// Stash the prediction so the matching `completed` event a
-				// few seconds-to-minutes later can compute δ-error without
-				// a DB round-trip. Keyed by (run_id, repo) — the same pair
-				// that arrives on every workflow_run.* event.
-				s.recentPredictions.Remember(head.Repository.FullName, head.WorkflowRun.ID, pred.PredictedSec, pred.ModelID, pred.ModelAlgo)
+				// Stash both calibrated (= what user saw, used for δ) and
+				// raw (used to feed the calibration EMA on .completed so
+				// the factor converges to the true model bias rather
+				// than its already-corrected residual).
+				s.recentPredictions.Remember(
+					head.Repository.FullName, head.WorkflowRun.ID,
+					calibratedSec, pred.PredictedSec, factor,
+					pred.ModelID, pred.ModelAlgo,
+				)
 			} else if mlErr, ok := err.(*ml.APIError); !ok || mlErr.Code != "no_active_model" {
 				// Log unexpected errors. "no_active_model" is the normal
 				// fresh-install case and not worth warning about.
@@ -150,13 +168,39 @@ func (s *Server) handleGithubWebhook(w http.ResponseWriter, r *http.Request) {
 					payload["actual_sec"] = actualSec
 					if remembered, ok := s.recentPredictions.Get(head.Repository.FullName, head.WorkflowRun.ID); ok {
 						payload["predicted_sec"] = remembered.PredictedSec
+						payload["predicted_raw_sec"] = remembered.PredictedRawSec
+						payload["calibration_factor"] = remembered.CalibrationFactor
 						payload["model_id"] = remembered.ModelID
 						payload["model_algo"] = remembered.ModelAlgo
 						// Δ as % of actual (signed). Negative = model
 						// over-predicted; positive = under-predicted.
+						// Measured against the CALIBRATED prediction
+						// (what user actually saw) for honesty.
 						if actualSec > 0 {
 							payload["delta_pct"] = 100.0 * (remembered.PredictedSec - actualSec) / actualSec
 						}
+
+						// Close the feedback loop: feed actual + RAW
+						// prediction into the per-(repo, workflow) EMA
+						// so the next prediction shifts toward observed
+						// reality. Use raw (not calibrated) so the
+						// factor converges to the model's true bias.
+						owner, name := splitFullName(head.Repository.FullName)
+						if repo, lookupErr := s.db.LookupRepo(r.Context(), owner, name); lookupErr == nil && remembered.PredictedRawSec > 0 {
+							if newFactor, err := s.db.UpdateCalibration(
+								r.Context(), repo.ID,
+								head.WorkflowRun.Name,
+								actualSec, remembered.PredictedRawSec,
+							); err != nil {
+								log.Warn().Err(err).
+									Str("repo", head.Repository.FullName).
+									Str("workflow", head.WorkflowRun.Name).
+									Msg("calibration EMA update failed")
+							} else {
+								payload["calibration_factor_next"] = newFactor
+							}
+						}
+
 						s.recentPredictions.Forget(head.Repository.FullName, head.WorkflowRun.ID)
 					}
 				}

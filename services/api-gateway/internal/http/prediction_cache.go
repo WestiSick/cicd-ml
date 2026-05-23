@@ -31,10 +31,19 @@ type predictionCache struct {
 }
 
 type predictionEntry struct {
+	// PredictedSec is the value the user saw on the dashboard at
+	// .requested time — model output × calibration factor. Used to
+	// compute the dashboard's δ% on .completed.
 	PredictedSec float64
-	ModelID      int64
-	ModelAlgo    string
-	RememberedAt time.Time
+	// PredictedRawSec is the un-calibrated model output. Used to
+	// feed the calibration EMA on .completed so the factor converges
+	// to the true model-vs-reality bias (rather than measuring its
+	// own corrected residual, which would dampen convergence).
+	PredictedRawSec    float64
+	CalibrationFactor  float64
+	ModelID            int64
+	ModelAlgo          string
+	RememberedAt       time.Time
 }
 
 func newPredictionCache(ttl time.Duration, max int) *predictionCache {
@@ -45,7 +54,18 @@ func newPredictionCache(ttl time.Duration, max int) *predictionCache {
 	}
 }
 
-func (c *predictionCache) Remember(repo string, runID int64, predicted float64, modelID int64, algo string) {
+// Remember stores a webhook-time prediction. `predicted` is the
+// CALIBRATED value shown to the user (= raw × factor). `predictedRaw`
+// and `factor` are kept alongside so the .completed handler can:
+//
+//   - feed the raw value into the calibration EMA (correct math: the
+//     EMA learns the model's true bias, not its compounded residual),
+//   - report δ% against the calibrated value (honest math: the user
+//     saw `predicted`, so the error must be measured against that).
+//
+// When the caller has no calibration to apply (e.g. unknown repo or
+// missing workflow), pass `predicted == predictedRaw` and `factor=1.0`.
+func (c *predictionCache) Remember(repo string, runID int64, predicted, predictedRaw, factor float64, modelID int64, algo string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -59,10 +79,12 @@ func (c *predictionCache) Remember(repo string, runID int64, predicted float64, 
 		c.evictOldest()
 	}
 	c.entries[cacheKey(repo, runID)] = predictionEntry{
-		PredictedSec: predicted,
-		ModelID:      modelID,
-		ModelAlgo:    algo,
-		RememberedAt: now,
+		PredictedSec:      predicted,
+		PredictedRawSec:   predictedRaw,
+		CalibrationFactor: factor,
+		ModelID:           modelID,
+		ModelAlgo:         algo,
+		RememberedAt:      now,
 	}
 }
 
