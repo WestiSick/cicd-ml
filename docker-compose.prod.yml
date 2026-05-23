@@ -4,7 +4,12 @@
 
 services:
   traefik:
-    image: traefik:v3.1
+    # v3 rolling tag — pulls latest 3.x patch. Earlier we pinned to
+    # v3.1, but it ships an old Docker SDK (default API 1.24) that
+    # handshake-fails against modern docker daemons (Docker Engine 29+
+    # require client API ≥ 1.40). Newer Traefik v3 images bundle a
+    # docker SDK with proper version negotiation.
+    image: traefik:v3
     restart: unless-stopped
     command:
       - --providers.docker=true
