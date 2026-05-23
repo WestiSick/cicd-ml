@@ -69,10 +69,9 @@ func ParseGithubURL(s string) (owner, name string, err error) {
 	}
 	s = strings.TrimSuffix(s, ".git")
 	s = strings.TrimSuffix(s, "/")
-	// SSH form
-	if strings.HasPrefix(s, "git@github.com:") {
-		s = strings.TrimPrefix(s, "git@github.com:")
-	}
+	// SSH form — TrimPrefix is a no-op when the prefix isn't present,
+	// so the explicit HasPrefix guard was redundant (S1017).
+	s = strings.TrimPrefix(s, "git@github.com:")
 	// HTTPS form
 	for _, p := range []string{"https://github.com/", "http://github.com/", "github.com/"} {
 		if strings.HasPrefix(s, p) {

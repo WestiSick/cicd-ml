@@ -24,7 +24,7 @@ func TestGetRepo_Success(t *testing.T) {
 		w.Header().Set("X-RateLimit-Limit", "5000")
 		w.Header().Set("X-RateLimit-Remaining", "4982")
 		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
-		w.Write([]byte(`{"id":42,"default_branch":"main"}`))
+		_, _ = w.Write([]byte(`{"id":42,"default_branch":"main"}`))
 	}))
 	defer srv.Close()
 
@@ -50,7 +50,7 @@ func TestGetRepo_RateLimited(t *testing.T) {
 		w.Header().Set("X-RateLimit-Remaining", "0")
 		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(20*time.Minute).Unix(), 10))
 		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte(`{"message":"API rate limit exceeded"}`))
+		_, _ = w.Write([]byte(`{"message":"API rate limit exceeded"}`))
 	}))
 	defer srv.Close()
 
@@ -71,7 +71,7 @@ func TestListWorkflowRuns_Pagination(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-RateLimit-Limit", "5000")
 		w.Header().Set("X-RateLimit-Remaining", "4999")
-		w.Write([]byte(`{"total_count":2,"workflow_runs":[
+		_, _ = w.Write([]byte(`{"total_count":2,"workflow_runs":[
 			{"id":1,"head_sha":"a","created_at":"2025-01-01T00:00:00Z","updated_at":"2025-01-01T00:00:00Z","status":"completed"},
 			{"id":2,"head_sha":"b","created_at":"2025-01-02T00:00:00Z","updated_at":"2025-01-02T00:00:00Z","status":"completed"}
 		]}`))

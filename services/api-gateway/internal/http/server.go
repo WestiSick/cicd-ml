@@ -189,17 +189,21 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (s *Server) notImplemented(label string) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusNotImplemented, errorEnvelope{
-			Error: errorBody{
-				Code:       "not_implemented",
-				Message:    "endpoint not implemented yet: " + label,
-				UserAction: "Wait for the upcoming release.",
-			},
-		})
-	}
-}
+// notImplemented used to back stub routes like /api/datasets and
+// /api/queue before they got real handlers. Now that every route has
+// an implementation we no longer reference it, but we keep the helper
+// commented out here as a template for the next time a placeholder
+// route is needed.
+//
+//   func (s *Server) notImplemented(label string) http.HandlerFunc {
+//       return func(w http.ResponseWriter, _ *http.Request) {
+//           writeJSON(w, http.StatusNotImplemented, errorEnvelope{
+//               Error: errorBody{
+//                   Code: "not_implemented", ...
+//               },
+//           })
+//       }
+//   }
 
 // errorEnvelope matches the canonical contract — see docs/architecture.md.
 type errorEnvelope struct {
