@@ -1,0 +1,25 @@
+name: go-test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    name: test go (api-gateway)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+          cache-dependency-path: services/api-gateway/go.sum
+      - name: copy migrations into embed path
+        run: |
+          mkdir -p services/api-gateway/internal/store/migrations
+          cp db/migrations/*.sql services/api-gateway/internal/store/migrations/
+      - name: go test (race detector on)
+        working-directory: services/api-gateway
+        run: go test -race -count=1 ./...
