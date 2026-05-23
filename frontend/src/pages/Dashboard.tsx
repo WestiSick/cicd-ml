@@ -69,15 +69,25 @@ export function Dashboard() {
     refetchInterval: 60_000,
   });
 
-  // KPI: mean wait — average of (started_at - run created) for the most
-  // recent N completed runs. We derive from activeCards (which carries
-  // both predicted and actual); a more rigorous version would query the
-  // /api/queue endpoint with a wider lookback.
-  const meanWait = (() => {
-    const completed = activeCards.filter((c) => c.actual_sec !== undefined);
-    if (completed.length === 0) return undefined;
-    const sum = completed.reduce((acc, c) => acc + (c.actual_sec ?? 0), 0);
-    return sum / completed.length;
+  // KPI: weighted-mean job duration over the last 24h. We sum
+  // (jobs_in_bucket × mean_sec_in_bucket) across all hourly buckets,
+  // divide by total jobs. This is the same dataset the sparkline below
+  // visualises, so the number always agrees with the chart shape.
+  //
+  // Earlier this read from `activeCards.actual_sec`, but activeCards
+  // mostly holds in-flight jobs whose duration_sec is 0 in the DB —
+  // the mean degenerated to 0.0s on any non-empty queue. The 24h
+  // window is what the user actually wants: "how long is a typical
+  // job in this system right now".
+  const meanDuration = (() => {
+    const buckets = load24hQ.data ?? [];
+    let totalJobs = 0;
+    let weighted = 0;
+    for (const b of buckets) {
+      totalJobs += b.jobs;
+      weighted += b.jobs * b.mean_sec;
+    }
+    return totalJobs > 0 ? weighted / totalJobs : undefined;
   })();
 
   const { connected } = useWebSocket("/ws/queue", (msg) => {
@@ -152,7 +162,7 @@ export function Dashboard() {
               letterSpacing: "-0.01em",
             }}
           >
-            {meanWait !== undefined ? formatDuration(meanWait) : "—"}
+            {meanDuration !== undefined ? formatDuration(meanDuration) : "—"}
           </div>
           <div style={{ marginTop: "var(--s-1)" }}>
             <SparklineChart
