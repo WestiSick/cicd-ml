@@ -7,7 +7,7 @@ import { Card } from "@/components/Card";
 import { EmptyState } from "@/components/EmptyState";
 import { BarChart } from "@/components/BarChart";
 import { StatusChip } from "@/components/StatusChip";
-import { fetchDatasetDetail, fetchFeaturePreview } from "@/api/repos";
+import { datasetExportCSVURL, fetchDatasetDetail, fetchFeaturePreview } from "@/api/repos";
 import { useT } from "@/i18n";
 import { formatDuration } from "@/lib/format";
 
@@ -58,7 +58,17 @@ export function DatasetDetail() {
       <PageHeader
         title={`${repo.owner}/${repo.name}`}
         subtitle={`${repo.runs_count.toLocaleString()} runs · ${repo.jobs_count.toLocaleString()} jobs`}
-        actions={<Link to="/datasets" style={{ color: "var(--text-secondary)" }}>{t("datasets.detail.back")}</Link>}
+        actions={
+          <div style={{ display: "flex", gap: "var(--s-3)", alignItems: "center" }}>
+            <a
+              href={datasetExportCSVURL(repo.id)}
+              style={{ color: "var(--text-secondary)", textDecoration: "none", fontSize: "var(--fs-13)" }}
+            >
+              {t("datasets.export_csv")}
+            </a>
+            <Link to="/datasets" style={{ color: "var(--text-secondary)" }}>{t("datasets.detail.back")}</Link>
+          </div>
+        }
       />
 
       <div style={{ display: "flex", gap: "var(--s-3)", marginBottom: "var(--s-4)", alignItems: "center" }}>

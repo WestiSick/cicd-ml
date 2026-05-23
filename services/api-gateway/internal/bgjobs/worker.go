@@ -79,26 +79,95 @@ var DefaultPools = []Pool{
 	},
 }
 
+// Broadcaster pushes bg_job updates onto a notification channel. The
+// api-gateway binary supplies an adapter around its in-process *ws.Hub
+// (`HubBroadcaster`). The standalone collector/simulator binaries supply
+// an HTTP broadcaster (`HTTPBroadcaster`) that POSTs to api-gateway's
+// /api/internal/broadcast endpoint, which re-publishes on the gateway's
+// hub. The Runner doesn't care which is in use — the interface lets us
+// swap delivery without touching the worker loop.
+type Broadcaster interface {
+	Publish(ctx context.Context, channel, eventType string, payload any)
+}
+
+// HubBroadcaster wraps *ws.Hub for in-process use. Same package so the
+// import graph stays flat — the gateway already depends on ws.
+type HubBroadcaster struct {
+	Hub *ws.Hub
+}
+
+func (h HubBroadcaster) Publish(_ context.Context, channel, eventType string, payload any) {
+	if h.Hub == nil {
+		return
+	}
+	h.Hub.PublishJSON(channel, eventType, payload)
+}
+
+// NoopBroadcaster is for tests and the very early cold boot when the
+// hub isn't wired yet.
+type NoopBroadcaster struct{}
+
+func (NoopBroadcaster) Publish(context.Context, string, string, any) {}
+
 type Runner struct {
-	db       *store.DB
-	hub      *ws.Hub
-	handlers map[string]Handler
+	db          *store.DB
+	broadcaster Broadcaster
+	handlers    map[string]Handler
 
 	pools []Pool
 }
 
+// NewRunner — preserve the old (db, hub) signature for the gateway, which
+// still passes its in-process hub. Standalone workers use
+// NewRunnerWithBroadcaster instead.
 func NewRunner(db *store.DB, hub *ws.Hub) *Runner {
+	return NewRunnerWithBroadcaster(db, HubBroadcaster{Hub: hub})
+}
+
+func NewRunnerWithBroadcaster(db *store.DB, b Broadcaster) *Runner {
+	if b == nil {
+		b = NoopBroadcaster{}
+	}
 	return &Runner{
-		db:       db,
-		hub:      hub,
-		handlers: map[string]Handler{},
-		pools:    DefaultPools,
+		db:          db,
+		broadcaster: b,
+		handlers:    map[string]Handler{},
+		pools:       DefaultPools,
 	}
 }
 
 // WithPools overrides the default pool layout (useful for tests).
 func (r *Runner) WithPools(pools []Pool) *Runner {
 	r.pools = pools
+	return r
+}
+
+// RestrictKinds narrows every pool's claim set to the intersection of
+// its original Kinds and `allowed`. Used by the api-gateway when the
+// collector/simulator are deployed as separate processes — the gateway
+// then refuses to claim collect_history/refresh/simulate so the
+// dedicated workers always win the SKIP LOCKED race.
+//
+// If allowed is empty, every pool is left as-is (single-binary mode).
+// A pool whose entire Kinds list is filtered out gets a zero-length
+// Kinds slice — the SQL `kind = ANY('{}')` matches nothing, so the
+// pool's workers idle without errors.
+func (r *Runner) RestrictKinds(allowed map[string]bool) *Runner {
+	if len(allowed) == 0 {
+		return r
+	}
+	newPools := make([]Pool, 0, len(r.pools))
+	for _, p := range r.pools {
+		filtered := make([]string, 0, len(p.Kinds))
+		for _, k := range p.Kinds {
+			if allowed[k] {
+				filtered = append(filtered, k)
+			}
+		}
+		p.Kinds = filtered
+		newPools = append(newPools, p)
+	}
+	r.pools = newPools
 	return r
 }
 
@@ -139,6 +208,12 @@ func (r *Runner) workerLoop(ctx context.Context, p Pool, id string) {
 }
 
 func (r *Runner) dispatchOnce(ctx context.Context, p Pool, workerID string) {
+	// Operator pause-flag honoured cooperatively. We check once per
+	// poll tick — when paused, the worker just idles without claiming.
+	// In-flight jobs continue running; only new claims are suppressed.
+	if paused, _ := r.db.GetBGJobsPaused(ctx); paused {
+		return
+	}
 	job, err := r.db.ClaimNextBGJobByKinds(ctx, p.Kinds)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -227,5 +302,5 @@ func (r *Runner) broadcast(ctx context.Context, id int64) {
 	if err != nil {
 		return
 	}
-	r.hub.PublishJSON("bg-jobs", "bg_job.updated", updated)
+	r.broadcaster.Publish(ctx, "bg-jobs", "bg_job.updated", updated)
 }

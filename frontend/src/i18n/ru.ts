@@ -87,6 +87,7 @@ export const ru: Record<TranslationKey, string> = {
   "dashboard.queue": "Активная очередь",
   "dashboard.queue.empty.title": "Очередь пуста.",
   "dashboard.queue.empty.hint": "Когда GitHub пришлёт workflow_run webhook, здесь появится карточка с прогнозом модели и live-таймером по мере выполнения.",
+  "dashboard.kpi.load24h.hint": "{n} job'ов за 24 часа",
   "dashboard.live_feed": "Live-лента",
   "dashboard.empty.title": "Ожидаем webhook-события.",
   "dashboard.empty.hint_connected": "Запушьте коммит в подключённый репозиторий или отправьте тестовое событие на /webhooks/github. Дашборд отреагирует за 1–2 секунды без перезагрузки.",
@@ -150,6 +151,13 @@ export const ru: Record<TranslationKey, string> = {
   "datasets.webhook.toast.installed": "Webhook установлен",
   "datasets.webhook.toast.removed": "Webhook удалён",
   "datasets.webhook.toast.failed": "Не удалось установить webhook",
+  "datasets.export_csv": "Экспорт CSV",
+  "sim.export_csv": "Экспорт CSV",
+  "admin.bg_pause": "Пауза воркеров",
+  "admin.bg_resume": "Запустить воркеры",
+  "admin.bg_paused_chip": "пауза",
+  "admin.bg_pause_toast": "Воркеры на паузе — текущие job'ы дойдут до конца, новые не берутся",
+  "admin.bg_resume_toast": "Воркеры запущены",
 
   // experiments
   "exp.title": "Эксперименты",

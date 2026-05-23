@@ -33,6 +33,8 @@ import (
 	gh "github.com/buzdin/cicd-ml/api-gateway/internal/github"
 	httpapi "github.com/buzdin/cicd-ml/api-gateway/internal/http"
 	"github.com/buzdin/cicd-ml/api-gateway/internal/ml"
+	"github.com/buzdin/cicd-ml/api-gateway/internal/scheduler"
+	"github.com/buzdin/cicd-ml/api-gateway/internal/simrun"
 	"github.com/buzdin/cicd-ml/api-gateway/internal/store"
 	"github.com/buzdin/cicd-ml/api-gateway/internal/ws"
 )
@@ -76,10 +78,10 @@ func main() {
 	hub := ws.NewHub()
 
 	// Background job runner. Handlers register their kind → function map.
-	// For now bootstrap orchestrator owns the bootstrap kind; the rest are
-	// stubs that simulate progress until the real workers land. Each stub
-	// publishes the same WebSocket events the real worker will — so the
-	// frontend doesn't change when we swap them in.
+	// Handlers for every kind are registered unconditionally — that way
+	// even in multi-binary mode the gateway can still claim a kind if
+	// the dedicated worker is offline. The pool kind-filter (below)
+	// decides which kinds we actually claim at runtime.
 	runner := bgjobs.NewRunner(db, hub)
 
 	orchestrator := bootstrap.NewOrchestrator(db)
@@ -97,10 +99,21 @@ func main() {
 	// goes through as bg_job progress so the UI shows real numbers.
 	runner.Register(store.JobKindComputeFeatures, computeFeaturesHandler(mlClient))
 
-	// Simulate stays as a stub for now — the real simulator endpoint is
-	// invoked directly from POST /api/simulator/run (synchronous, < 1s).
-	_, _, _, simulateH := bootstrap.StubHandlers()
-	runner.Register(store.JobKindSimulate, wrap(simulateH))
+	// Simulate handler — real implementation in single-binary mode. When
+	// the standalone simulator container is deployed and the gateway's
+	// ENABLED_BG_KINDS excludes "simulate", this registration is dead
+	// code (the kind-filter prevents the pool from claiming simulate).
+	runner.Register(store.JobKindSimulate, simulateHandler(db))
+
+	// Optional kind-restriction. When the collector + simulator are
+	// deployed as separate containers, set ENABLED_BG_KINDS on the
+	// api-gateway to `bootstrap,compute_features,train_model` so the
+	// gateway doesn't race the dedicated workers for collect_history /
+	// refresh / simulate. Empty (default) = claim everything.
+	if allowed := parseKindList(cfg.EnabledBGKinds); len(allowed) > 0 {
+		runner.RestrictKinds(allowed)
+		log.Info().Strs("allowed", keysOf(allowed)).Msg("bg-jobs runner restricted to a subset of kinds")
+	}
 
 	go runner.Run(ctx)
 	go bootstrap.FinishOnDone(ctx, db)
@@ -135,6 +148,45 @@ func getenv(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// parseKindList splits a comma-separated env var into a set of allowed
+// kinds. Whitespace around tokens is trimmed; empty tokens are skipped.
+func parseKindList(s string) map[string]bool {
+	out := map[string]bool{}
+	if s == "" {
+		return out
+	}
+	start := 0
+	for i := 0; i <= len(s); i++ {
+		if i == len(s) || s[i] == ',' {
+			tok := trimSpace(s[start:i])
+			if tok != "" {
+				out[tok] = true
+			}
+			start = i + 1
+		}
+	}
+	return out
+}
+
+func keysOf(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func trimSpace(s string) string {
+	lo, hi := 0, len(s)
+	for lo < hi && (s[lo] == ' ' || s[lo] == '\t') {
+		lo++
+	}
+	for hi > lo && (s[hi-1] == ' ' || s[hi-1] == '\t') {
+		hi--
+	}
+	return s[lo:hi]
 }
 
 // wrap adapts a func with raw `func(int, int, string, string)` progress
@@ -243,6 +295,71 @@ func computeFeaturesHandler(mlClient *ml.Client) bgjobs.Handler {
 		progress(3, 3, fmt.Sprintf("done — %d features × %d jobs", resp.FeatureCount, resp.Jobs), "")
 		return nil
 	}
+}
+
+// simulateHandler — promotes the (previously stub) simulate bg_job to
+// real execution. Same logic as POST /api/simulator/run: load window →
+// project → run every requested strategy → persist one sim_runs row.
+//
+// Lives in api-gateway main so single-binary mode also runs real
+// simulations on bootstrap finish. The standalone simulator binary
+// uses an identical handler from cmd/simulator/main.go.
+func simulateHandler(db *store.DB) bgjobs.Handler {
+	return func(ctx context.Context, job store.BGJob, progress bgjobs.ProgressFn) error {
+		var payload struct {
+			WindowStart   *time.Time `json:"window_start"`
+			WindowEnd     *time.Time `json:"window_end"`
+			RepoIDs       []int64    `json:"repo_ids"`
+			Strategies    []string   `json:"strategies"`
+			Runners       int        `json:"runners"`
+			SLAMainSec    int        `json:"sla_main_sec"`
+			SLAFeatureSec int        `json:"sla_feature_sec"`
+		}
+		if len(job.Payload) > 0 {
+			if err := json.Unmarshal(job.Payload, &payload); err != nil {
+				return fmt.Errorf("decode simulate payload: %w", err)
+			}
+		}
+
+		// Read scheduler weights from system_state directly — avoids
+		// pulling the http package into main just for one helper.
+		var weightsRaw []byte
+		w := scheduler.DefaultCustomWeights()
+		_ = db.Pool.QueryRow(ctx,
+			`SELECT value FROM system_state WHERE key = 'custom_weights'`).Scan(&weightsRaw)
+		if len(weightsRaw) > 0 {
+			_ = json.Unmarshal(weightsRaw, &w)
+		}
+
+		params := simrun.NewParams(simrun.Params{
+			WindowStart:   timeOrZero(payload.WindowStart),
+			WindowEnd:     timeOrZero(payload.WindowEnd),
+			RepoIDs:       payload.RepoIDs,
+			Strategies:    payload.Strategies,
+			Runners:       payload.Runners,
+			SLAMainSec:    payload.SLAMainSec,
+			SLAFeatureSec: payload.SLAFeatureSec,
+			CustomWeights: w,
+		})
+
+		progress(0, len(params.Strategies),
+			fmt.Sprintf("simulator: %d strategies", len(params.Strategies)), "")
+
+		out, err := simrun.Run(ctx, db, params)
+		if err != nil {
+			return err
+		}
+		progress(len(params.Strategies), len(params.Strategies),
+			fmt.Sprintf("simulator done: %d jobs replayed", out.JobsRun), "")
+		return nil
+	}
+}
+
+func timeOrZero(t *time.Time) time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	return *t
 }
 
 // collectHandler binds a github.Syncer to the bgjobs.Handler contract.

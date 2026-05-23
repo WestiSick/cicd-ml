@@ -60,3 +60,9 @@ export async function listSimRuns(limit = 50): Promise<SimRunRow[]> {
   const r = await api<{ runs: SimRunRow[] }>(`/api/simulator/runs?limit=${limit}`);
   return r.runs;
 }
+
+// Browser-direct CSV download URL.
+export function simRunExportCSVURL(id: number): string {
+  const base = (import.meta.env.VITE_API_BASE as string) || "http://localhost:8080";
+  return `${base}/api/simulator/runs/${id}/export.csv`;
+}

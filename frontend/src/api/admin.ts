@@ -47,3 +47,10 @@ export async function fetchActivity(limit = 100): Promise<ActivityEntry[]> {
   const r = await api<{ entries: ActivityEntry[] }>(`/api/activity?limit=${limit}`);
   return r.entries;
 }
+
+export async function pauseBGRunner(): Promise<{ paused: boolean }> {
+  return api("/api/admin/bg-jobs/pause", { method: "POST" });
+}
+export async function resumeBGRunner(): Promise<{ paused: boolean }> {
+  return api("/api/admin/bg-jobs/resume", { method: "POST" });
+}

@@ -28,7 +28,18 @@ type Config struct {
 	// downloads without proxying through the ML service. Defaults match the
 	// compose mount.
 	ModelsDir string
-	LogLevel  zerolog.Level
+	// EnabledBGKinds is a comma-separated allow-list of bg_jobs kinds
+	// the api-gateway's runner will claim. Empty = all kinds (single-
+	// binary mode). When the collector + simulator are deployed as
+	// separate containers, set this to limit the gateway to its own
+	// kinds (bootstrap, compute_features, train_model) so it doesn't
+	// race the dedicated workers for collect_history / refresh / simulate.
+	EnabledBGKinds string
+	// GatewayInternalBase is the URL the standalone collector / simulator
+	// binaries use to push WS broadcasts back to the gateway. Defaults
+	// to the in-docker hostname.
+	GatewayInternalBase string
+	LogLevel            zerolog.Level
 }
 
 func Load() Config {
@@ -43,6 +54,8 @@ func Load() Config {
 		PublicWSBase:           getenv("PUBLIC_WS_BASE", "ws://localhost:8080"),
 		BootstrapDefaultMonths: getint("BOOTSTRAP_DEFAULT_MONTHS", 6),
 		ModelsDir:              getenv("MODELS_DIR", "/var/lib/cicdml/models"),
+		EnabledBGKinds:         getenv("ENABLED_BG_KINDS", ""),
+		GatewayInternalBase:    getenv("GATEWAY_INTERNAL_BASE", "http://api:8080"),
 		LogLevel:               parseLevel(getenv("LOG_LEVEL", "info")),
 	}
 }

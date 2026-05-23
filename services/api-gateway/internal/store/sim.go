@@ -96,6 +96,24 @@ func (d *DB) ListSimRuns(ctx context.Context, limit int) ([]SimRun, error) {
 	return out, rows.Err()
 }
 
+// GetSimRun fetches one sim_runs row by id. Used by the CSV export
+// handler. Returns pgx.ErrNoRows when the id is unknown.
+func (d *DB) GetSimRun(ctx context.Context, id int64) (SimRun, error) {
+	row := d.Pool.QueryRow(ctx, `
+		SELECT id, strategy, window_start, window_end, repos, jobs_count,
+		       makespan_sec, wait_p50_sec, wait_p95_sec, throughput_per_min,
+		       sla_violations, extra, created_at
+		FROM sim_runs WHERE id = $1
+	`, id)
+	var s SimRun
+	err := row.Scan(
+		&s.ID, &s.Strategy, &s.WindowStart, &s.WindowEnd, &s.Repos, &s.JobsCount,
+		&s.MakespanSec, &s.WaitP50Sec, &s.WaitP95Sec, &s.ThroughputPerMin,
+		&s.SLAViolations, &s.Extra, &s.CreatedAt,
+	)
+	return s, err
+}
+
 // SimInputJob is the projection over jobs ⨝ workflow_runs ⨝ predictions
 // that the simulator endpoint loads from the database. Kept here (not in
 // the scheduler package) because pulling it depends on the store/DB types.

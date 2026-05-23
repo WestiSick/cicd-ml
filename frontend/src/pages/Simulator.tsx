@@ -8,7 +8,7 @@ import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
 import { BarChart } from "@/components/BarChart";
 import { ApiError } from "@/api/client";
-import { listSimRuns, listStrategies, runSimulator, type SimMetrics } from "@/api/simulator";
+import { listSimRuns, listStrategies, runSimulator, simRunExportCSVURL, type SimMetrics } from "@/api/simulator";
 import { useT } from "@/i18n";
 import type { TranslationKey } from "@/i18n/types";
 
@@ -209,6 +209,7 @@ export function Simulator() {
                   <Th>Makespan</Th>
                   <Th>Wait p95</Th>
                   <Th>SLA viol.</Th>
+                  <Th>{" "}</Th>
                 </tr>
               </thead>
               <tbody>
@@ -220,6 +221,14 @@ export function Simulator() {
                     <Td mono>{r.makespan_sec?.toFixed(0) ?? "—"}</Td>
                     <Td mono>{r.wait_p95_sec?.toFixed(0) ?? "—"}</Td>
                     <Td mono>{r.sla_violations ?? "—"}</Td>
+                    <Td>
+                      <a
+                        href={simRunExportCSVURL(r.id)}
+                        style={{ color: "var(--text-secondary)", textDecoration: "none", fontSize: 11 }}
+                      >
+                        {t("sim.export_csv")}
+                      </a>
+                    </Td>
                   </tr>
                 ))}
               </tbody>

@@ -1,0 +1,14 @@
+root = "."
+tmp_dir = "tmp-simulator"
+poll = true
+poll_interval = 1000
+
+[build]
+  cmd = "go build -o ./tmp-simulator/simulator ./cmd/simulator"
+  bin = "./tmp-simulator/simulator"
+  delay = 500
+  exclude_dir = ["tmp", "tmp-collector", "tmp-simulator", "vendor"]
+  include_ext = ["go"]
+
+[log]
+  time = true

@@ -46,6 +46,10 @@ services:
       PUBLIC_API_BASE: ${PUBLIC_API_BASE}
       PUBLIC_WS_BASE: ${PUBLIC_WS_BASE}
       BOOTSTRAP_DEFAULT_MONTHS: ${BOOTSTRAP_DEFAULT_MONTHS}
+      # Hand collect_history / refresh / simulate to the standalone workers.
+      # The gateway claims only its own kinds via the bg-jobs runner's
+      # kind-filter (see internal/bgjobs.RestrictKinds).
+      ENABLED_BG_KINDS: bootstrap,compute_features,train_model
       LOG_LEVEL: ${LOG_LEVEL}
     depends_on:
       db: { condition: service_healthy }
@@ -60,18 +64,41 @@ services:
       # GitHub fetch. Read-only — the orchestrator never writes here.
       - ./db/seed:/var/lib/cicdml/seed:ro
 
+  # Standalone collector worker — handles collect_history / refresh
+  # bg_jobs. Built from the same Go module as the api-gateway (shared
+  # internal packages); separate container so long-running GitHub API
+  # pulls don't share goroutine schedulers with user-facing HTTP traffic.
   collector:
     build:
       context: .
-      dockerfile: services/collector/Dockerfile
+      dockerfile: services/api-gateway/Dockerfile
+      target: collector-prod
     restart: unless-stopped
     environment:
       POSTGRES_DSN: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?sslmode=disable
-      REDIS_ADDR: ${REDIS_HOST}:${REDIS_PORT}
+      # Workers push WS broadcasts to the gateway via this URL. In-docker
+      # only — never goes through the reverse proxy.
+      GATEWAY_INTERNAL_BASE: http://${API_HOST}:${API_PORT}
       LOG_LEVEL: ${LOG_LEVEL}
     depends_on:
       db: { condition: service_healthy }
-      redis: { condition: service_healthy }
+      api: { condition: service_started }
+
+  # Standalone simulator worker — claims `simulate` bg_jobs and writes
+  # one sim_runs row per requested strategy.
+  simulator:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+      target: simulator-prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_DSN: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?sslmode=disable
+      GATEWAY_INTERNAL_BASE: http://${API_HOST}:${API_PORT}
+      LOG_LEVEL: ${LOG_LEVEL}
+    depends_on:
+      db: { condition: service_healthy }
+      api: { condition: service_started }
 
   ml:
     build:

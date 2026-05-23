@@ -7,7 +7,7 @@ import { Card } from "@/components/Card";
 import { Button } from "@/components/Button";
 import { StatusChip } from "@/components/StatusChip";
 import { ApiError } from "@/api/client";
-import { fetchActivity, fetchSystemHealth, listWebhookEvents } from "@/api/admin";
+import { fetchActivity, fetchSystemHealth, listWebhookEvents, pauseBGRunner, resumeBGRunner } from "@/api/admin";
 import { fetchSystemState, saveAdminSettings, type CustomWeights } from "@/api/system";
 import { useT } from "@/i18n";
 import { formatRelativeTime } from "@/lib/format";
@@ -63,6 +63,8 @@ export function Admin() {
               <span className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
                 {t("admin.health.last_checked", { time: new Date(health.data.time).toLocaleTimeString() })}
               </span>
+              <span style={{ flex: 1 }} />
+              <BGRunnerToggle />
             </div>
             <div style={{ display: "grid", gap: "var(--s-2)" }}>
               {health.data.components.map((c) => (
@@ -156,6 +158,57 @@ export function Admin() {
         )}
       </Card>
     </>
+  );
+}
+
+/* BGRunnerToggle — pause/resume the in-process bg-jobs runner without
+ * restarting any containers. Reflects the "paused" chip we surface on
+ * /admin/health and matches what's in the system_state row.
+ *
+ * Polls the health endpoint to derive the current state — sufficient
+ * because the operator only flips this once in a long while, not in
+ * tight loops.
+ */
+function BGRunnerToggle() {
+  const t = useT();
+  const qc = useQueryClient();
+  const healthQ = useQuery({ queryKey: ["system-health"], queryFn: fetchSystemHealth });
+  // Paused = the health response has the "bg-jobs runner" paused chip.
+  const paused = !!healthQ.data?.components.some(
+    (c) => c.name === "bg-jobs runner" && c.message?.startsWith("paused"),
+  );
+
+  const pause = useMutation({
+    mutationFn: pauseBGRunner,
+    onSuccess: () => {
+      toast.success(t("admin.bg_pause_toast"));
+      qc.invalidateQueries({ queryKey: ["system-health"] });
+    },
+    onError: (err: unknown) => {
+      if (err instanceof ApiError) toast.error(err.message, { description: err.userAction });
+      else toast.error("pause failed");
+    },
+  });
+  const resume = useMutation({
+    mutationFn: resumeBGRunner,
+    onSuccess: () => {
+      toast.success(t("admin.bg_resume_toast"));
+      qc.invalidateQueries({ queryKey: ["system-health"] });
+    },
+    onError: (err: unknown) => {
+      if (err instanceof ApiError) toast.error(err.message, { description: err.userAction });
+      else toast.error("resume failed");
+    },
+  });
+
+  return paused ? (
+    <Button variant="primary" size="sm" onClick={() => resume.mutate()} loading={resume.isPending}>
+      {t("admin.bg_resume")}
+    </Button>
+  ) : (
+    <Button variant="ghost" size="sm" onClick={() => pause.mutate()} loading={pause.isPending}>
+      {t("admin.bg_pause")}
+    </Button>
   );
 }
 

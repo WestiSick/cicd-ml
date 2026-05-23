@@ -1,0 +1,14 @@
+root = "."
+tmp_dir = "tmp-collector"
+poll = true
+poll_interval = 1000
+
+[build]
+  cmd = "go build -o ./tmp-collector/collector ./cmd/collector"
+  bin = "./tmp-collector/collector"
+  delay = 500
+  exclude_dir = ["tmp", "tmp-collector", "tmp-simulator", "vendor"]
+  include_ext = ["go"]
+
+[log]
+  time = true

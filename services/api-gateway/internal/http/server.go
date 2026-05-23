@@ -127,6 +127,8 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/admin/webhooks", s.listAdminWebhooks)
 		r.Get("/admin/health", s.systemHealth)
 		r.Post("/admin/settings", s.updateAdminSettings)
+		r.Post("/admin/bg-jobs/pause", s.pauseBGRunner)
+		r.Post("/admin/bg-jobs/resume", s.resumeBGRunner)
 
 		// Models registry.
 		r.Get("/models", s.listModels)
@@ -150,16 +152,20 @@ func (s *Server) buildRouter() chi.Router {
 
 		// Internal — ml-service posts per-iteration metrics here.
 		r.Post("/internal/training/{id}/metric", s.postTrainingMetric)
+		r.Post("/internal/broadcast", s.internalBroadcast)
 
 		r.Get("/simulator/runs", s.listSimRuns)
 		r.Post("/simulator/run", s.runSimulator)
 		r.Get("/simulator/strategies", s.listStrategies)
+		r.Get("/simulator/runs/{id}/export.csv", s.exportSimRunCSV)
 		r.Get("/queue", s.queueSnapshot)
+		r.Get("/dashboard/load-24h", s.dashboardLoad24h)
 		r.Get("/datasets", s.datasetsSummary)
 		r.Get("/datasets/coverage", s.datasetsCoverage)
 		r.Get("/datasets/timeline", s.datasetsTimeline)
 		r.Get("/datasets/{id}", s.datasetDetail)
 		r.Get("/datasets/{id}/features", s.datasetFeaturePreview)
+		r.Get("/datasets/{id}/export.csv", s.exportDatasetCSV)
 	})
 
 	r.Post("/webhooks/github", s.handleGithubWebhook)

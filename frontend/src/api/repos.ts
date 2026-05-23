@@ -166,6 +166,14 @@ export type FeaturePreviewRow = {
   features: Record<string, number | string | null>;
 };
 
+// Browser-direct URL for the dataset CSV export. We don't fetch the
+// bytes through api() because the response is a binary stream — let the
+// browser handle the download flow.
+export function datasetExportCSVURL(id: number): string {
+  const base = (import.meta.env.VITE_API_BASE as string) || "http://localhost:8080";
+  return `${base}/api/datasets/${id}/export.csv`;
+}
+
 export async function fetchFeaturePreview(
   id: number,
   opts: { limit?: number; jobName?: string } = {},

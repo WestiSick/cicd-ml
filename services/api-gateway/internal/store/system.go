@@ -18,6 +18,7 @@ const (
 	keyActiveStrategy = "active_strategy"
 	keyCustomWeights  = "custom_weights"
 	keyGithubPAT      = "github_pat"
+	keyBGJobsPaused   = "bg_jobs_paused"
 )
 
 type ActiveModelSummary struct {
@@ -156,6 +157,37 @@ func (d *DB) SetGithubPAT(ctx context.Context, token string) error {
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
 	`, keyGithubPAT, val)
 	return err
+}
+
+// SetBGJobsPaused flips the operator-controlled pause flag for the
+// background-job runner. When true, every worker loop sees the flag and
+// skips its claim cycle until resumed. Lets the operator suspend
+// long-running pulls / training without restarting containers.
+func (d *DB) SetBGJobsPaused(ctx context.Context, paused bool) error {
+	val, _ := json.Marshal(paused)
+	_, err := d.Pool.Exec(ctx, `
+		INSERT INTO system_state (key, value, updated_at)
+		VALUES ($1, $2, now())
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+	`, keyBGJobsPaused, val)
+	return err
+}
+
+// GetBGJobsPaused returns the current pause state. Missing row → false
+// (default running). Any unmarshal error → also false; we'd rather
+// run-with-a-warning than mysteriously block work.
+func (d *DB) GetBGJobsPaused(ctx context.Context) (bool, error) {
+	var raw []byte
+	err := d.Pool.QueryRow(ctx,
+		`SELECT value FROM system_state WHERE key = $1`, keyBGJobsPaused).Scan(&raw)
+	if err != nil {
+		return false, nil
+	}
+	var v bool
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return false, nil
+	}
+	return v, nil
 }
 
 // GetGithubPAT returns the persisted PAT or empty string if none. Callers

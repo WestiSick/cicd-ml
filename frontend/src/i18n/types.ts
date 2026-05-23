@@ -83,6 +83,7 @@ export type TranslationKey =
   | "dashboard.queue"
   | "dashboard.queue.empty.title"
   | "dashboard.queue.empty.hint"
+  | "dashboard.kpi.load24h.hint"
   | "dashboard.live_feed"
   | "dashboard.empty.title"
   | "dashboard.empty.hint_connected"
@@ -146,6 +147,13 @@ export type TranslationKey =
   | "datasets.webhook.toast.installed"
   | "datasets.webhook.toast.removed"
   | "datasets.webhook.toast.failed"
+  | "datasets.export_csv"
+  | "sim.export_csv"
+  | "admin.bg_pause"
+  | "admin.bg_resume"
+  | "admin.bg_paused_chip"
+  | "admin.bg_pause_toast"
+  | "admin.bg_resume_toast"
 
   // experiments
   | "exp.title"

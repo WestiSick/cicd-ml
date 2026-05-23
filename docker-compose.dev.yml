@@ -18,9 +18,17 @@ services:
 
   collector:
     build:
-      target: dev
+      target: collector-dev
     volumes:
-      - ./services/collector:/app
+      - ./services/api-gateway:/app
+      - ./db/migrations:/app/internal/store/migrations:ro
+
+  simulator:
+    build:
+      target: simulator-dev
+    volumes:
+      - ./services/api-gateway:/app
+      - ./db/migrations:/app/internal/store/migrations:ro
 
   ml:
     build:

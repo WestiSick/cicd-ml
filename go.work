@@ -1,7 +1,10 @@
 go 1.23
 
-use (
-	./services/api-gateway
-	./services/collector
-	./services/simulator
-)
+// All Go code now lives in the api-gateway module. The collector and
+// simulator binaries are built from the same module — their main packages
+// are under services/api-gateway/cmd/{collector,simulator} and they
+// import the shared internal/{store,github,bgjobs,scheduler,simrun,...}
+// packages directly. Running them as separate processes is a deployment
+// concern (separate compose services + Dockerfile stages), not a module
+// boundary.
+use ./services/api-gateway

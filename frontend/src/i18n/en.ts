@@ -78,6 +78,7 @@ export const en: Record<TranslationKey, string> = {
   "dashboard.queue": "Active queue",
   "dashboard.queue.empty.title": "Queue is idle.",
   "dashboard.queue.empty.hint": "When GitHub fires a workflow_run webhook, a card appears here with the model's prediction and ticks live as the run progresses.",
+  "dashboard.kpi.load24h.hint": "{n} jobs in last 24h",
   "dashboard.live_feed": "Live feed",
   "dashboard.empty.title": "Waiting for webhook events.",
   "dashboard.empty.hint_connected": "Push a commit to a tracked repository, or POST a test event to /webhooks/github. The dashboard reacts in 1–2 seconds without a page refresh.",
@@ -141,6 +142,13 @@ export const en: Record<TranslationKey, string> = {
   "datasets.webhook.toast.installed": "Webhook installed",
   "datasets.webhook.toast.removed": "Webhook removed",
   "datasets.webhook.toast.failed": "Webhook install failed",
+  "datasets.export_csv": "Export CSV",
+  "sim.export_csv": "Export CSV",
+  "admin.bg_pause": "Pause workers",
+  "admin.bg_resume": "Resume workers",
+  "admin.bg_paused_chip": "paused",
+  "admin.bg_pause_toast": "Workers paused — in-flight jobs finish, new claims suppressed",
+  "admin.bg_resume_toast": "Workers resumed",
 
   // experiments
   "exp.title": "Experiments",

@@ -11,7 +11,9 @@ import { useT } from "@/i18n";
 import { fetchSystemState } from "@/api/system";
 import { formatDuration, formatSignedPercent } from "@/lib/format";
 import { QueueCard } from "@/components/QueueCard";
+import { SparklineChart } from "@/components/SparklineChart";
 import { useDashboardQueue } from "@/hooks/useDashboardQueue";
+import { fetchLoad24h } from "@/api/dashboard";
 
 type QueueEvent = {
   type: string;
@@ -54,6 +56,14 @@ export function Dashboard() {
   // Active-job cards, keyed by run_id. Combines REST seed with WS
   // updates — see useDashboardQueue for the merging logic.
   const activeCards = useDashboardQueue();
+
+  // 24h load — sparkline next to the KPI. Polled at 60s; the chart's
+  // bucket granularity is 1h so faster refresh adds nothing visible.
+  const load24hQ = useQuery({
+    queryKey: ["load-24h"],
+    queryFn: fetchLoad24h,
+    refetchInterval: 60_000,
+  });
 
   // KPI: mean wait — average of (started_at - run created) for the most
   // recent N completed runs. We derive from activeCards (which carries
@@ -122,11 +132,28 @@ export function Dashboard() {
           value={connected ? t("common.online") : t("common.offline")}
           hint={connected ? t("dashboard.kpi.ws_connected") : t("dashboard.kpi.reconnecting")}
         />
-        <Kpi
-          label={t("dashboard.kpi.mean_wait")}
-          value={meanWait !== undefined ? formatDuration(meanWait) : "—"}
-          hint={meanWait !== undefined ? t("dashboard.kpi.mean_wait.hint", { n: activeCards.filter(c => c.actual_sec !== undefined).length }) : t("dashboard.kpi.mean_wait.empty")}
-        />
+        <Card>
+          <div className="caps" style={{ color: "var(--text-tertiary)" }}>{t("dashboard.kpi.mean_wait")}</div>
+          <div
+            className="mono"
+            style={{
+              marginTop: "var(--s-2)",
+              fontSize: "var(--fs-28)",
+              fontWeight: 500,
+              letterSpacing: "-0.01em",
+            }}
+          >
+            {meanWait !== undefined ? formatDuration(meanWait) : "—"}
+          </div>
+          <div style={{ marginTop: "var(--s-1)" }}>
+            <SparklineChart
+              points={(load24hQ.data ?? []).map((b) => ({ label: b.hour.slice(11, 16) + " UTC", value: b.jobs }))}
+            />
+          </div>
+          <div style={{ marginTop: 4, color: "var(--text-tertiary)", fontSize: "var(--fs-12)" }}>
+            {t("dashboard.kpi.load24h.hint", { n: (load24hQ.data ?? []).reduce((acc, b) => acc + b.jobs, 0) })}
+          </div>
+        </Card>
       </section>
 
       <h2 style={sectionTitleStyle}>
