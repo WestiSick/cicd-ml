@@ -11,6 +11,10 @@ bin/
 *.out
 go.work.sum
 
+# Air hot-reload build artifacts (per-service tmp/ contains the rebuilt binary
+# and its swap files — not source, regenerated on every file change).
+services/**/tmp/
+
 # Build-time copy — canonical lives in /db/migrations
 services/api-gateway/internal/store/migrations/
 

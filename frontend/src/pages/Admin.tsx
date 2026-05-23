@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/Card";
 import { StatusChip } from "@/components/StatusChip";
 import { fetchSystemHealth, listWebhookEvents } from "@/api/admin";
+import { useT } from "@/i18n";
 
 /* /admin — operational diagnostics, not user-facing settings.
  *
@@ -16,6 +17,7 @@ import { fetchSystemHealth, listWebhookEvents } from "@/api/admin";
  * whole point of looking at it. Error states inside the sections rather
  * than a global blocker. */
 export function Admin() {
+  const t = useT();
   const health = useQuery({
     queryKey: ["system-health"],
     queryFn: fetchSystemHealth,
@@ -31,20 +33,20 @@ export function Admin() {
   return (
     <>
       <PageHeader
-        title="Admin"
-        subtitle="System health, webhook deliveries, and operational controls."
+        title={t("admin.title")}
+        subtitle={t("admin.subtitle")}
       />
 
-      <h2 id="system-health" style={sectionTitleStyle}>System health</h2>
+      <h2 id="system-health" style={sectionTitleStyle}>{t("admin.system_health")}</h2>
       <Card>
-        {health.isLoading && <p style={mutedText}>Checking…</p>}
-        {health.isError && <p style={mutedText}>Could not fetch system health.</p>}
+        {health.isLoading && <p style={mutedText}>{t("common.loading")}</p>}
+        {health.isError && <p style={mutedText}>{t("common.retry")}</p>}
         {health.data && (
           <>
             <div style={{ display: "flex", alignItems: "center", gap: "var(--s-3)", marginBottom: "var(--s-3)" }}>
               <StatusChip status={health.data.state === "ok" ? "synced" : health.data.state === "degraded" ? "paused" : "failed"} />
               <span className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
-                last checked {new Date(health.data.time).toLocaleTimeString()}
+                {t("admin.health.last_checked", { time: new Date(health.data.time).toLocaleTimeString() })}
               </span>
             </div>
             <div style={{ display: "grid", gap: "var(--s-2)" }}>
@@ -70,22 +72,22 @@ export function Admin() {
       </Card>
 
       <h2 id="webhooks" style={{ ...sectionTitleStyle, marginTop: "var(--s-8)" }}>
-        Webhook deliveries
+        {t("admin.webhooks")}
       </h2>
       <Card>
-        {webhooks.isLoading && <p style={mutedText}>Loading…</p>}
+        {webhooks.isLoading && <p style={mutedText}>{t("common.loading")}</p>}
         {webhooks.data && webhooks.data.length === 0 && (
-          <p style={mutedText}>No webhook deliveries yet. Configure a webhook in your repository pointing at <span className="mono">/webhooks/github</span>.</p>
+          <p style={mutedText}>{t("admin.webhooks_empty")}</p>
         )}
         {webhooks.data && webhooks.data.length > 0 && (
           <table style={tableStyle}>
             <thead>
               <tr>
-                <Th>Received</Th>
-                <Th>Event</Th>
-                <Th>Repo</Th>
-                <Th>HMAC</Th>
-                <Th>Error</Th>
+                <Th>{t("admin.webhook.col.received")}</Th>
+                <Th>{t("admin.webhook.col.event")}</Th>
+                <Th>{t("admin.webhook.col.repo")}</Th>
+                <Th>{t("admin.webhook.col.hmac")}</Th>
+                <Th>{t("admin.webhook.col.error")}</Th>
               </tr>
             </thead>
             <tbody>

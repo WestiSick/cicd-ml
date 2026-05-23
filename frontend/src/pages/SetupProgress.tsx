@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { listBGJobs, type BGJob } from "@/api/bgjobs";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { StatusChip } from "@/components/StatusChip";
+import { LanguageSwitcher, useT } from "@/i18n";
 
 const PHASE_LABEL: Record<BGJob["kind"], string> = {
   bootstrap:         "01  Setup chain",
@@ -24,6 +25,7 @@ const PHASE_LABEL: Record<BGJob["kind"], string> = {
  * render time — cheap because the list is small (a few dozen jobs max).
  */
 export function SetupProgress({ bootstrapId }: { bootstrapId: number }) {
+  const t = useT();
   const initial = useQuery({
     queryKey: ["bg-jobs-initial", bootstrapId],
     queryFn: () => listBGJobs({ limit: 200 }),
@@ -78,9 +80,13 @@ export function SetupProgress({ bootstrapId }: { bootstrapId: number }) {
   ];
 
   return (
-    <div style={{ maxWidth: 760, margin: "0 auto", padding: "var(--s-12) var(--s-6) var(--s-16)" }}>
+    <div style={{ position: "relative" }}>
+      <div style={{ position: "absolute", top: "var(--s-4)", right: "var(--s-6)", zIndex: 1 }}>
+        <LanguageSwitcher />
+      </div>
+      <div style={{ maxWidth: 760, margin: "0 auto", padding: "var(--s-12) var(--s-6) var(--s-16)" }}>
       <div className="caps" style={{ color: "var(--accent)", marginBottom: "var(--s-2)" }}>
-        Initial setup — running
+        {t("setup.label")} — running
       </div>
       <h1
         style={{
@@ -90,7 +96,7 @@ export function SetupProgress({ bootstrapId }: { bootstrapId: number }) {
           letterSpacing: "-0.01em",
         }}
       >
-        Bootstrapping your dataset…
+        {t("setup.progress.title")}
       </h1>
       <p
         style={{
@@ -99,8 +105,7 @@ export function SetupProgress({ bootstrapId }: { bootstrapId: number }) {
           fontSize: "var(--fs-14)",
         }}
       >
-        You can close this tab — work continues in the background. Come
-        back and you'll pick up the same progress.
+        {t("setup.progress.intro")}
       </p>
 
       {phaseOrder.map((phase) => {
@@ -126,6 +131,7 @@ export function SetupProgress({ bootstrapId }: { bootstrapId: number }) {
           </div>
         );
       })}
+      </div>
     </div>
   );
 }

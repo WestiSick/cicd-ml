@@ -124,6 +124,18 @@ func (d *DB) LookupRepo(ctx context.Context, owner, name string) (Repo, error) {
 	return scanRepo(row)
 }
 
+// LookupRepoByID finds a tracked repo by its surrogate id. Pairs with the
+// /api/repos/:id/sync handler.
+func (d *DB) LookupRepoByID(ctx context.Context, id int64) (Repo, error) {
+	row := d.Pool.QueryRow(ctx, `
+		SELECT id, owner, name, github_id, default_branch, tracked_branches,
+		       status, last_synced_at, oldest_run_at, newest_run_at,
+		       runs_count, jobs_count, last_error, is_seed, added_at
+		FROM repos WHERE id = $1
+	`, id)
+	return scanRepo(row)
+}
+
 // nilIfEmpty turns "" into nil so NULLABLE columns store NULL instead of
 // empty strings — keeps queries like `WHERE conclusion IS NULL` honest.
 func nilIfEmpty(s string) any {

@@ -1,127 +1,200 @@
-# Usage guide
+# Руководство пользователя
 
-This document walks through every scenario the application supports.  
-Every action is performed **in the web UI** — no CLI required.
+Документ описывает все сценарии работы с системой. Все действия
+выполняются **в веб-интерфейсе** — CLI для штатной работы не нужен.
 
-## Table of contents
+## Оглавление
 
-1. [First run — the `/setup` onboarding screen](#first-run)
-2. [Adding your own repository](#scenario-1-add-your-own-repository)
-3. [Real-time push → dashboard](#scenario-2-real-time-push--dashboard)
-4. [Training a model](#scenario-3-training-a-model)
-5. [Comparing scheduling strategies](#scenario-4-comparing-scheduling-strategies)
-6. [Refreshing data and retraining](#scenario-5-refreshing-data-and-retraining)
-7. [Exporting materials for the thesis](#exporting-materials-for-the-thesis)
-8. [Troubleshooting](#troubleshooting)
+1. [Переключение языка интерфейса](#переключение-языка)
+2. [Первый запуск — экран `/setup`](#первый-запуск)
+3. [Добавление своего репозитория](#сценарий-1-добавить-свой-репозиторий)
+4. [Real-time реакция на `git push`](#сценарий-2-real-time-push--дашборд)
+5. [Обучение модели](#сценарий-3-обучение-модели)
+6. [Подбор гиперпараметров через Optuna](#сценарий-4-подбор-гиперпараметров)
+7. [Сравнение стратегий планирования](#сценарий-5-сравнение-стратегий)
+8. [Экспорт пакета для диссертации](#сценарий-6-экспорт-пакета-для-диссертации)
+9. [Диагностика](#диагностика)
 
 ---
 
-## First run
+## Переключение языка
 
-When the system is launched on an empty database it routes every request to
-`/setup` until onboarding completes. The page has four sections:
+В правом верхнем углу любого экрана видны две моно-кнопки **EN / RU**.
+Выбор сохраняется в `localStorage` и работает на всех страницах, включая
+онбординг `/setup`. Первый визит выбирает язык по `navigator.language`
+браузера: всё, что начинается с `ru-` → русский, остальное → английский.
 
-| # | Section | What it does |
+## Первый запуск
+
+Если БД пустая (флаг `bootstrap_done = false` в `system_state`), любой
+URL перенаправляется на `/setup`. Форма состоит из четырёх блоков:
+
+| # | Блок | Назначение |
 |---|---|---|
-| 01 | GitHub Token | Optional. Without it the API limit is 60 req/h. |
-| 02 | Seed repositories | Pre-selected public projects with rich CI history. Uncheck any you don't want. |
-| 03 | History window | 3 / 6 / 12 months. Longer → more data → better models. |
-| 04 | Models to pre-train | Linear, RF, XGBoost (default), LightGBM (default), MLP, LSTM. |
+| 01 | GitHub-токен | Необязателен. Без него лимит GitHub API — 60 запросов/час. |
+| 02 | Стартовые репозитории | 7 публичных проектов с богатой историей CI. Снимите чекбоксы с тех, что не нужны. |
+| 03 | Окно истории | 3 / 6 / 12 месяцев. Больше — точнее модель, но больше API-вызовов. |
+| 04 | Модели для предобучения | Linear, RF, XGBoost (✓), LightGBM (✓), MLP, LSTM. |
 
-Pressing **Start setup** schedules five background phases:
+Кнопка **«Начать настройку»** запускает в фоне три фазы:
 
-1. Create GitHub webhooks (if a token was provided).
-2. Collect run/job history per repository.
-3. Compute feature matrices.
-4. Train every selected model in sequence.
-5. Run a baseline simulation across all strategies.
+1. **Сбор данных** — по каждому выбранному репозиторию (io-пул, 1 воркер).
+2. **Извлечение фич** — только после полного завершения фазы 1.
+3. **Обучение моделей** — параллельно (compute-пул, 3 воркера), только
+   после завершения фазы 2.
 
-Progress streams live on the page. You can close the tab — progress resumes
-on return.
+Каждая фаза тикает в реальном времени на экране прогресса. Вкладку
+можно закрыть — фон не прерывается. На странице видны три уровня:
+плашка фазы → плашка bg_job → progress-бар.
 
-## Scenario 1: add your own repository
+> **Важно.** Раньше bootstrap-orchestrator складывал в очередь все
+> bg_jobs одновременно — train_model падал с InsufficientDataError
+> до окончания сбора. Сейчас orchestrator ждёт каждую фазу через
+> опрос `bg_jobs.status`.
 
-1. Open `/datasets`.
-2. Press **Add repository**.
-3. Paste a URL: `https://github.com/<owner>/<repo>`.
-4. Select branches (default: just the default branch) and a period.
-5. Press **Add**.
+## Сценарий 1: добавить свой репозиторий
 
-The card appears with status `fetching`. The progress bar updates in real
-time. When status flips to `synced`, click the card for distributions, top
-workflows and a feature-matrix preview.
+1. `/datasets → Add repository`.
+2. Вставьте URL: `https://github.com/<owner>/<repo>` (поддерживаются
+   также `git@github.com:owner/repo.git` и `owner/repo`).
+3. Выберите окно истории (3/6/12 мес.) и опционально GitHub-токен.
+4. Нажмите **«Add & start sync»**.
 
-## Scenario 2: real-time push → dashboard
+Карточка появится со статусом `idle` → быстро переключится в `fetching`
+(сбор стартует автоматически — bg_job `collect_history` ставится при
+успешном POST `/api/repos`). Когда сбор завершится — статус `synced`,
+counters runs/jobs обновятся.
 
-1. Open `/admin → Webhooks`. The system shows the webhook URL it expects
-   GitHub to call. For local development use a tunnel
-   (`cloudflared tunnel --url http://localhost:8080`).
-2. On any repository card in `/datasets`, toggle **Live webhook** on. If
-   your token has the right permissions the system creates the webhook in
-   GitHub automatically. Otherwise it shows a `curl` snippet for manual
-   setup.
-3. Push a commit to that repository.
-4. On `/dashboard`, within 1–2 seconds a card appears in the **Live feed**
-   with the predicted duration. As GitHub Actions executes, the card
-   updates with the actual duration and the prediction error.
+На карточках с любым статусом, кроме `fetching`, есть кнопка **Sync /
+Start sync** — поставить в очередь свежий проход для обновления данных.
 
-## Scenario 3: training a model
+## Сценарий 2: real-time push → дашборд
 
-1. Open `/experiments → Train new model`.
-2. The wizard:
-   1. Pick an algorithm: Linear / RF / XGBoost / LightGBM / MLP / LSTM.
-   2. Pick a dataset filter: repositories and time range.
-   3. Hyperparameters (sensible defaults; optional Optuna search with a
-      configurable trial budget).
-   4. Time-based train/test split with a cutoff visualised on a timeline.
-3. Press **Start training**.
-4. A live training page opens with:
-   - per-iteration loss / validation MAE / RMSE chart,
-   - log tail (last 200 lines),
-   - **Cancel** button.
-   You may close the tab — the run continues in the background.
-5. On completion you see metrics, predicted-vs-actual plot, residuals plot,
-   feature importance, and **Activate** / **Compare** actions.
+1. `/admin → Webhooks` — система покажет URL, на который GitHub должен
+   слать события: `https://<domain>/webhooks/github` (для локальной
+   разработки используйте туннель типа `cloudflared tunnel`).
+2. В настройках GitHub-репозитория создайте Webhook:
+   `Settings → Webhooks → Add webhook` → Content-type `application/json`,
+   Secret из `GITHUB_WEBHOOK_SECRET`, события `workflow_run`.
+3. Сделайте `git push` в репозиторий.
+4. На `/dashboard` карточка с прогнозом появится через 1–2 секунды.
+   Поле «Live feed» KPI должно показывать `online`.
+5. Когда GitHub Actions реально завершит job — карточка обновится
+   фактическим временем и ошибкой прогноза. Без перезагрузки страницы.
 
-## Scenario 4: comparing scheduling strategies
+## Сценарий 3: обучение модели
 
-1. Open `/simulator → New run`.
-2. Choose a time window (e.g. `last 7 days`).
-3. Check the strategies to compare: FIFO, SJF, EDF, Custom.
-4. Press **Run**. Within ~30–60 seconds you see:
-   - Mean and p95 wait time per strategy.
-   - Makespan.
-   - SLA-violation count.
-5. Press **Export** to download CSV + PNG ready for the thesis.
+1. `/experiments` → выберите алгоритм (pill в форме «New training run»):
+   Linear / Random Forest / XGBoost / LightGBM / MLP.
+2. Отметьте **«Activate on finish»** если хотите сразу использовать
+   модель в симуляторе.
+3. **Не нужно** включать Optuna для первого захода — дефолтные параметры
+   уже разумные.
+4. Нажмите **«Train <algo>»**.
+5. Toast: «Training queued». Под формой появится строка в «Recent
+   training runs» — кликабельна, ведёт на `/experiments/jobs/<id>`.
 
-## Scenario 5: refreshing data and retraining
+На странице `/experiments/jobs/:id` видно:
 
-1. `/datasets → Refresh all` (or per-card) pulls runs created since the last
-   sync.
-2. After collection finishes, `/experiments → Retrain active model` queues a
-   retraining job on the fresh dataset using the same hyperparameters.
+- Статус-чип + progress bar.
+- **Per-iteration metrics** — train loss и val RMSE по итерациям
+  (XGBoost/LightGBM выдают полную кривую, Linear/RF/MLP — финальную
+  точку).
+- **Predicted vs actual** — log-log scatter на тестовой выборке.
+   Идеальная модель — все точки на пунктирной диагонали `y = x`.
+- **Top features** — горизонтальная гистограмма топ-20 фич по важности
+  (Gini для деревьев, |coef| для Linear).
 
-## Exporting materials for the thesis
+Обучение на ~500 job'ах занимает 0.3 секунды для Linear и 1–5 секунд
+для XGBoost.
 
-In the UI:
+## Сценарий 4: Подбор гиперпараметров
 
-- `/experiments → Export thesis pack`
-- `/simulator → Export thesis pack`
+1. `/experiments`, в форме «New training run» снизу есть блок
+   **«Hyperparameter search (Optuna)»**.
+2. Pill-выбор: `off / 10 / 30 / 50 / 100 trials`. По умолчанию off
+   (используются дефолтные гиперпараметры).
+3. Выберите 30 trials, **Activate on finish**, нажмите **Train xgboost**.
+4. Optuna прогонит 30 итераций TPE-сэмплера на той же time-based
+   train/test разбивке, что и обычный train. Поиск минимизирует MAE
+   на тестовой выборке.
+5. После завершения в `/api/models` появится модель с лучшими
+   найденными гиперпараметрами. На странице training detail видна
+   `train_curves` финального fit'а с этими параметрами.
 
-These produce, in `./docs/thesis/`:
+На датасете в 500–1000 job'ов 30 итераций занимают ~10–20 секунд.
 
-- `dataset_stats.md` — dataset characterisation.
-- `model_comparison.csv` — metrics for every trained model.
-- `strategy_comparison.csv` — strategy comparison.
-- `figures/*.pdf` — LaTeX-ready graphics.
+## Сценарий 5: сравнение стратегий
 
-## Troubleshooting
+1. `/simulator`.
+2. Выберите окно: «Last 7 days» / «Last 30 days» / «Last 90 days» / «All
+   data».
+3. Отметьте стратегии: FIFO / SJF / EDF / Custom.
+4. **Runners** — число параллельных runner'ов (по умолчанию 2).
+5. **SLA main** и **SLA feature** — дедлайны в секундах для main-ветки
+   и feature-веток соответственно (используются EDF и Custom).
+6. **«Run simulation»**.
 
-Everything is visible in the UI — you should never need to read raw logs.
+Через 30–60 секунд (на 500 job'ах — < 1 секунды) появятся 4 гистограммы:
+makespan, wait mean, wait p95, SLA violations. Под ними — таблица всех
+метрик по каждой стратегии. Внизу — история «Recent runs»: каждый
+запуск сохранён в `sim_runs`, можно сравнивать конфигурации между
+собой.
 
-| Symptom | Where to look | Resolution |
+Симулятор использует prediction'ы активной модели как `PredictedSec`.
+Если активной модели нет — fallback'ом служит фактическое время
+`actual_duration_sec` (oracle-режим), что даёт «потолок» SJF.
+
+## Сценарий 6: экспорт пакета для диссертации
+
+Кнопка **«Export thesis pack»** в правом верхнем углу `/experiments`.
+
+Toast: «Thesis pack exported». В `/var/lib/cicdml/thesis/<timestamp>/`
+появятся:
+
+```
+models.csv                — все обученные модели + метрики
+dataset_stats.csv         — каждый репозиторий: runs/jobs/период покрытия
+strategy_comparison.csv   — все симуляции
+predicted_actual.csv      — пары (actual, predicted) активной модели
+feature_importance.csv    — важность фич активной модели
+
+figures/
+├── model_comparison.{png,pdf}
+├── strategy_comparison.{png,pdf}
+├── predicted_vs_actual_model_<id>.{png,pdf}
+├── feature_importance_model_<id>.{png,pdf}
+└── training_curves_run_<id>.{png,pdf}
+```
+
+CSV LaTeX-дружелюбные: запятые, точка как десятичный разделитель,
+без лишних кавычек — `pandas.read_csv` без аргументов.
+PDF 300 DPI, тонкие линии, моно-шрифты — готовы под `\includegraphics{}`.
+
+Путь — это монтированный Docker volume `thesis-output`. Достать файлы
+с хоста:
+
+```bash
+# каждый файл по отдельности
+docker compose cp api:/var/lib/cicdml/thesis/20260514-193804 ./thesis-pack/
+
+# либо смотреть прямо в томе (Windows path к Docker Desktop volume)
+\\wsl$\docker-desktop\mnt\docker-desktop-disk\data\docker\volumes\cicd-ml_thesis-output\_data\
+```
+
+## Диагностика
+
+Всё видно в UI — лазить в логи обычно не нужно.
+
+| Симптом | Где смотреть | Что делать |
 |---|---|---|
-| GitHub rate limit hit | `/datasets` card chip shows **Rate limited, retrying in 23 min**. | Wait — collector resumes automatically. Or add a token in `/admin`. |
-| Webhook not arriving | `/admin → Webhooks` shows last 50 deliveries with HMAC status. | Re-create webhook from the dataset card; verify the tunnel is up. |
-| Model predictions off on a new repo | The model card shows a **coverage %** — how many jobs in this repo resemble the training data. | Add more history via `/datasets` and retrain. |
-| A service is unreachable | The header health dot turns yellow/red; `/admin → System health` lists per-service status. | Use **Restart service** there, or check `docker compose logs`. |
+| GitHub rate limit во время сбора | Карточка в `/datasets` показывает «Rate limited, retrying in 23 min» | Подождать или добавить токен в форме Add repository / Sync |
+| Webhook не приходит | `/admin → Webhook deliveries` — таблица последних 50 событий с результатом HMAC | Пересоздать webhook с правильным `GITHUB_WEBHOOK_SECRET` |
+| Модель плохо обобщает на новый репо | Подключите больше истории через `/datasets`, переобучите модель | Запустите Optuna 50 trials |
+| Сервис не отвечает | Точка статуса в шапке → `/admin → System health` | Перезапустить контейнер из CLI: `docker compose restart <service>` |
+| Long-running bg_job не двигается | `/admin` ничего не показывает напрямую, но `GET /api/bg-jobs?status=running` через REST даст полную картину | Подождать или отменить запись через DB (`UPDATE bg_jobs SET status='cancelled' WHERE id=…`) |
+
+---
+
+Альтернатива UI для разработчиков — прямые REST-вызовы. Список
+актуальных эндпоинтов в [`docs/architecture.md`](architecture.md).

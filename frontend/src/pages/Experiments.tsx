@@ -13,13 +13,15 @@ import { activateModel, listModels, startTraining, type ModelRow } from "@/api/m
 import { listBGJobs, type BGJob } from "@/api/bgjobs";
 import { exportThesisPack } from "@/api/thesisExport";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { useT } from "@/i18n";
+import type { TranslationKey } from "@/i18n/types";
 
-const ALGORITHMS = [
-  { id: "linear",   label: "Linear (Ridge)" },
-  { id: "rf",       label: "Random Forest" },
-  { id: "xgboost",  label: "XGBoost" },
-  { id: "lightgbm", label: "LightGBM" },
-  { id: "mlp",      label: "MLP (sklearn)" },
+const ALGORITHMS: { id: string; labelKey: TranslationKey }[] = [
+  { id: "linear",   labelKey: "setup.algo.linear" },
+  { id: "rf",       labelKey: "setup.algo.rf" },
+  { id: "xgboost",  labelKey: "setup.algo.xgboost" },
+  { id: "lightgbm", labelKey: "setup.algo.lightgbm" },
+  { id: "mlp",      labelKey: "setup.algo.mlp" },
 ];
 
 /* /experiments — train new models, view metrics, activate.
@@ -36,6 +38,7 @@ const ALGORITHMS = [
  * the UI. Easy to extend later: just expand the form below.
  */
 export function Experiments() {
+  const t = useT();
   const qc = useQueryClient();
   const modelsQ = useQuery({ queryKey: ["models"], queryFn: listModels, refetchInterval: 5_000 });
   const trainingsQ = useQuery({
@@ -62,24 +65,24 @@ export function Experiments() {
       optuna_trials: optunaTrials >= 2 ? optunaTrials : undefined,
     }),
     onSuccess: (r) => {
-      toast.success("Training queued", { description: r.message });
+      toast.success(t("exp.toast.queued"), { description: r.message });
       qc.invalidateQueries({ queryKey: ["bg-jobs", "train_model"] });
     },
     onError: (err: unknown) => {
       if (err instanceof ApiError) toast.error(err.message, { description: err.userAction });
-      else toast.error("Could not start training.");
+      else toast.error("training failed");
     },
   });
 
   const activate1 = useMutation({
     mutationFn: (id: number) => activateModel(id),
     onSuccess: (_, id) => {
-      toast.success(`Model #${id} activated`);
+      toast.success(t("exp.toast.activated", { id }));
       qc.invalidateQueries({ queryKey: ["models"] });
     },
     onError: (err: unknown) => {
       if (err instanceof ApiError) toast.error(err.message, { description: err.userAction });
-      else toast.error("Could not activate model.");
+      else toast.error("activate failed");
     },
   });
 
@@ -92,28 +95,28 @@ export function Experiments() {
   const exportPack = useMutation({
     mutationFn: exportThesisPack,
     onSuccess: (r) => {
-      toast.success(`Thesis pack exported`, {
-        description: `${r.files.length} CSV files at ${r.directory}`,
+      toast.success(t("exp.export.toast"), {
+        description: `${r.files.length} CSV @ ${r.directory}`,
       });
     },
     onError: (err: unknown) => {
       if (err instanceof ApiError) toast.error(err.message, { description: err.userAction });
-      else toast.error("Export failed.");
+      else toast.error("export failed");
     },
   });
 
   return (
     <>
       <PageHeader
-        title="Experiments"
-        subtitle="Trained models, metrics, and side-by-side comparison."
+        title={t("exp.title")}
+        subtitle={t("exp.subtitle")}
         actions={
           <>
             <Button variant="ghost" onClick={() => exportPack.mutate()} loading={exportPack.isPending}>
-              Export thesis pack
+              {t("exp.export_pack")}
             </Button>
             <Button variant="primary" onClick={() => train.mutate()} loading={train.isPending}>
-              Train {algo}
+              {t("exp.train", { algo })}
             </Button>
           </>
         }
@@ -121,7 +124,7 @@ export function Experiments() {
 
       <Card style={{ marginBottom: "var(--s-4)" }}>
         <div className="caps" style={{ color: "var(--text-tertiary)", marginBottom: "var(--s-2)" }}>
-          New training run
+          {t("exp.new_run")}
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", alignItems: "center" }}>
           {ALGORITHMS.map((a) => (
@@ -130,7 +133,7 @@ export function Experiments() {
               onClick={() => setAlgo(a.id)}
               style={pillStyle(algo === a.id)}
             >
-              {a.label}
+              {t(a.labelKey)}
             </button>
           ))}
           <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "var(--fs-13)", marginLeft: "var(--s-3)" }}>
@@ -140,37 +143,37 @@ export function Experiments() {
               onChange={(e) => setActivate(e.target.checked)}
               style={{ accentColor: "var(--accent)" }}
             />
-            <span>Activate on finish</span>
+            <span>{t("exp.activate_on_finish")}</span>
           </label>
         </div>
 
         {/* Optuna hyperparameter search */}
         <div style={{ marginTop: "var(--s-4)", paddingTop: "var(--s-3)", borderTop: "1px solid var(--border-subtle)" }}>
           <div className="caps" style={{ color: "var(--text-tertiary)", marginBottom: "var(--s-2)" }}>
-            Hyperparameter search (Optuna)
+            {t("exp.optuna.label")}
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", alignItems: "center" }}>
             {[0, 10, 30, 50, 100].map((n) => (
               <button key={n} onClick={() => setOptunaTrials(n)} style={pillStyle(optunaTrials === n)}>
-                {n === 0 ? "off" : `${n} trials`}
+                {n === 0 ? t("exp.optuna.off") : t("exp.optuna.trials", { n })}
               </button>
             ))}
             <span style={{ marginLeft: "var(--s-3)", color: "var(--text-tertiary)", fontSize: "var(--fs-12)" }}>
               {optunaTrials >= 2
-                ? `TPE sampler · ~${Math.max(1, Math.round(optunaTrials * 0.15))}s per trial on this dataset`
-                : "uses default hyperparameters when off"}
+                ? t("exp.optuna.hint_on", { sec: Math.max(1, Math.round(optunaTrials * 0.15)) })
+                : t("exp.optuna.hint_off")}
             </span>
           </div>
         </div>
       </Card>
 
-      <h2 style={sectionTitleStyle}>Trained models</h2>
-      {modelsQ.isLoading && <p style={mutedText}>Loading…</p>}
+      <h2 style={sectionTitleStyle}>{t("exp.trained_models")}</h2>
+      {modelsQ.isLoading && <p style={mutedText}>{t("common.loading")}</p>}
       {modelsQ.data && modelsQ.data.length === 0 && (
         <EmptyState
-          title="No models trained yet."
-          hint="Pick an algorithm above and click Train. Metrics include MAE/RMSE/MAPE/R² and Spearman rank correlation (important for SJF — see /simulator)."
-          action={<Button variant="primary" onClick={() => train.mutate()} loading={train.isPending}>Train your first model</Button>}
+          title={t("exp.empty.title")}
+          hint={t("exp.empty.hint")}
+          action={<Button variant="primary" onClick={() => train.mutate()} loading={train.isPending}>{t("exp.empty.action")}</Button>}
         />
       )}
       {modelsQ.data && modelsQ.data.length > 0 && (
@@ -178,16 +181,16 @@ export function Experiments() {
           <table style={tableStyle}>
             <thead>
               <tr>
-                <Th>ID</Th>
-                <Th>Algo</Th>
-                <Th>Name</Th>
+                <Th>{t("exp.col.id")}</Th>
+                <Th>{t("exp.col.algo")}</Th>
+                <Th>{t("exp.col.name")}</Th>
                 <Th>MAE test (s)</Th>
                 <Th>RMSE test (s)</Th>
                 <Th>MAPE</Th>
                 <Th>R²</Th>
                 <Th>Spearman</Th>
-                <Th>Trained</Th>
-                <Th></Th>
+                <Th>{t("exp.col.trained")}</Th>
+                <Th>{" "}</Th>
               </tr>
             </thead>
             <tbody>
@@ -197,9 +200,9 @@ export function Experiments() {
         </Card>
       )}
 
-      <h2 style={{ ...sectionTitleStyle, marginTop: "var(--s-8)" }}>Recent training runs</h2>
+      <h2 style={{ ...sectionTitleStyle, marginTop: "var(--s-8)" }}>{t("exp.recent_runs")}</h2>
       {recentTrainings.length === 0 ? (
-        <EmptyState title="No recent training runs." hint="Trigger one above and watch it stream here." />
+        <EmptyState title={t("exp.recent_runs")} hint={t("exp.empty.hint")} />
       ) : (
         <Card>
           <div style={{ display: "grid", gap: 0 }}>
@@ -212,6 +215,7 @@ export function Experiments() {
 }
 
 function ModelRowEl({ m, onActivate }: { m: ModelRow; onActivate: () => void }) {
+  const t = useT();
   const metric = (k: string) => {
     const v = m.metrics?.[k];
     if (typeof v !== "number" || !isFinite(v)) return "—";
@@ -243,7 +247,7 @@ function ModelRowEl({ m, onActivate }: { m: ModelRow; onActivate: () => void }) 
         {m.is_active ? (
           <StatusChip status="synced" />
         ) : (
-          <Button size="sm" variant="ghost" onClick={onActivate}>Activate</Button>
+          <Button size="sm" variant="ghost" onClick={onActivate}>{t("common.activate")}</Button>
         )}
       </Td>
     </tr>

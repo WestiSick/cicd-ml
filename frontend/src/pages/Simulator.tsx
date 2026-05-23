@@ -9,15 +9,18 @@ import { EmptyState } from "@/components/EmptyState";
 import { BarChart } from "@/components/BarChart";
 import { ApiError } from "@/api/client";
 import { listSimRuns, listStrategies, runSimulator, type SimMetrics } from "@/api/simulator";
+import { useT } from "@/i18n";
+import type { TranslationKey } from "@/i18n/types";
 
-const WINDOW_PRESETS = [
-  { label: "Last 7 days",  days: 7 },
-  { label: "Last 30 days", days: 30 },
-  { label: "Last 90 days", days: 90 },
-  { label: "All data",     days: 36500 },
+const WINDOW_PRESETS: { labelKey: TranslationKey; days: number }[] = [
+  { labelKey: "sim.window.last_7",  days: 7 },
+  { labelKey: "sim.window.last_30", days: 30 },
+  { labelKey: "sim.window.last_90", days: 90 },
+  { labelKey: "sim.window.all",     days: 36500 },
 ];
 
 export function Simulator() {
+  const t = useT();
   const qc = useQueryClient();
   const strategiesQ = useQuery({ queryKey: ["sim-strategies"], queryFn: listStrategies });
   const recent = useQuery({ queryKey: ["sim-runs"], queryFn: () => listSimRuns(20) });
@@ -43,16 +46,13 @@ export function Simulator() {
       });
     },
     onSuccess: (resp) => {
-      toast.success(`Simulation complete — ${resp.jobs} jobs across ${resp.results.length} strategies.`);
+      toast.success(t("sim.toast.done", { jobs: resp.jobs, n: resp.results.length }));
       setResults(resp.results);
       qc.invalidateQueries({ queryKey: ["sim-runs"] });
     },
     onError: (err: unknown) => {
-      if (err instanceof ApiError) {
-        toast.error(err.message, { description: err.userAction });
-      } else {
-        toast.error("Simulation failed.");
-      }
+      if (err instanceof ApiError) toast.error(err.message, { description: err.userAction });
+      else toast.error("simulation failed");
     },
   });
 
@@ -72,11 +72,11 @@ export function Simulator() {
   return (
     <>
       <PageHeader
-        title="Simulator"
-        subtitle="Replay historical job streams through FIFO / SJF / EDF / Custom and compare."
+        title={t("sim.title")}
+        subtitle={t("sim.subtitle")}
         actions={
           <Button variant="primary" loading={run.isPending} disabled={selected.length === 0} onClick={() => run.mutate()}>
-            Run simulation
+            {t("sim.run")}
           </Button>
         }
       />
@@ -84,20 +84,20 @@ export function Simulator() {
       <Card style={{ marginBottom: "var(--s-4)" }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s-6)" }}>
           <div>
-            <div className="caps" style={labelStyle}>Window</div>
+            <div className="caps" style={labelStyle}>{t("sim.window")}</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)" }}>
               {WINDOW_PRESETS.map((p) => (
                 <button
-                  key={p.label}
+                  key={p.labelKey}
                   style={pillStyle(p.days === windowDays)}
                   onClick={() => setWindowDays(p.days)}
                 >
-                  {p.label}
+                  {t(p.labelKey)}
                 </button>
               ))}
             </div>
 
-            <div className="caps" style={{ ...labelStyle, marginTop: "var(--s-4)" }}>Strategies</div>
+            <div className="caps" style={{ ...labelStyle, marginTop: "var(--s-4)" }}>{t("sim.strategies")}</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)" }}>
               {(strategiesQ.data ?? ["fifo", "sjf", "edf", "custom"]).map((s) => {
                 const active = selected.includes(s);
@@ -111,7 +111,7 @@ export function Simulator() {
           </div>
 
           <div>
-            <div className="caps" style={labelStyle}>Runners</div>
+            <div className="caps" style={labelStyle}>{t("sim.runners")}</div>
             <input
               type="number"
               min={1}
@@ -123,7 +123,7 @@ export function Simulator() {
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s-3)", marginTop: "var(--s-4)" }}>
               <div>
-                <div className="caps" style={labelStyle}>SLA main (sec)</div>
+                <div className="caps" style={labelStyle}>{t("sim.sla_main")}</div>
                 <input
                   type="number"
                   value={slaMain}
@@ -132,7 +132,7 @@ export function Simulator() {
                 />
               </div>
               <div>
-                <div className="caps" style={labelStyle}>SLA feature (sec)</div>
+                <div className="caps" style={labelStyle}>{t("sim.sla_feature")}</div>
                 <input
                   type="number"
                   value={slaFeature}
@@ -147,19 +147,19 @@ export function Simulator() {
 
       {results === null && (
         <EmptyState
-          title="No simulation results yet."
-          hint="Pick a window and strategies, then run. The same job stream is replayed through every selected strategy on the same fixed runner count."
+          title={t("sim.empty.title")}
+          hint={t("sim.empty.hint")}
         />
       )}
 
       {results && results.length > 0 && (
         <>
-          <h2 style={sectionTitleStyle}>Results</h2>
+          <h2 style={sectionTitleStyle}>{t("sim.results")}</h2>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "var(--s-3)", marginBottom: "var(--s-6)" }}>
-            <ChartCard title="Makespan (sec)" data={charts!.makespan} />
-            <ChartCard title="Wait mean (sec)" data={charts!.waitMean} />
-            <ChartCard title="Wait p95 (sec)" data={charts!.waitP95} />
-            <ChartCard title="SLA violations" data={charts!.slaViols} />
+            <ChartCard title={t("sim.metric.makespan")} data={charts!.makespan} />
+            <ChartCard title={t("sim.metric.wait_mean")} data={charts!.waitMean} />
+            <ChartCard title={t("sim.metric.wait_p95")} data={charts!.waitP95} />
+            <ChartCard title={t("sim.metric.sla_viol")} data={charts!.slaViols} />
           </div>
 
           <Card>
@@ -198,7 +198,7 @@ export function Simulator() {
 
       {recent.data && recent.data.length > 0 && (
         <>
-          <h2 style={{ ...sectionTitleStyle, marginTop: "var(--s-8)" }}>Recent runs</h2>
+          <h2 style={{ ...sectionTitleStyle, marginTop: "var(--s-8)" }}>{t("sim.recent_runs")}</h2>
           <Card>
             <table style={tableStyle}>
               <thead>

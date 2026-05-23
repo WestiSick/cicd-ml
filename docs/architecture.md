@@ -1,14 +1,15 @@
-# Architecture
+# Архитектура
 
-System architecture for `cicd-ml` — the practical artifact of the master's
-thesis on ML-based CI/CD prediction and scheduling.
+Архитектура системы `cicd-ml` — практического артефакта магистерской
+диссертации по ML-предсказанию и планированию очередей CI/CD.
 
-## Components
+## Компоненты
 
 ```
                 ┌──────────────────────────────────────────────┐
                 │             Frontend (React + TS)            │
                 │  /dashboard /datasets /experiments /admin    │
+                │  /simulator /setup /experiments/jobs/:id     │
                 └────────────────┬──────────────┬──────────────┘
                                  │ REST         │ WebSocket
                                  ▼              ▼
@@ -16,61 +17,78 @@ thesis on ML-based CI/CD prediction and scheduling.
                     │       api-gateway (Go, chi)      │
                     │  REST · WS · webhooks · auth     │
                     │  scheduler · bootstrap · bg_jobs │
-                    └──┬───────────────┬───────────────┘
-                       │               │
-                       │  POST /predict │
-                       ▼               ▼
-            ┌──────────────────┐  ┌──────────────────┐
-            │  ml-service      │  │     Redis        │
-            │  (FastAPI)       │  │  queue · pub/sub │
-            │ train · predict  │  └──────────────────┘
-            └────────┬─────────┘
-                     │
-                     ▼
-            ┌──────────────────────────────────────┐
-            │            PostgreSQL                 │
-            │  repos · runs · jobs · features ·     │
-            │  models · predictions · bg_jobs ·     │
-            │  sim_runs · training_metrics · …      │
-            └──────────────────────────────────────┘
-                     ▲
-                     │
-            ┌──────────────────┐
-            │   collector      │
-            │  GitHub Actions  │
-            │  history ingest  │
-            └──────────────────┘
+                    │  github collector · simulator    │
+                    └──┬──────────────┬────────────────┘
+                       │ HTTP         │
+                       │              ▼
+                       │   ┌──────────────────┐  ┌──────────────────┐
+                       │   │  ml-service      │  │     Redis        │
+                       │   │  (FastAPI)       │  │  pub/sub (зарез.)│
+                       │   │ train · predict  │  └──────────────────┘
+                       │   │ features · export│
+                       │   │ optuna · figures │
+                       │   └────────┬─────────┘
+                       │            │
+                       ▼            ▼
+            ┌────────────────────────────────────────┐
+            │            PostgreSQL                  │
+            │  repos · workflow_runs · jobs ·         │
+            │  features · models · predictions ·      │
+            │  bg_jobs · training_metrics ·           │
+            │  sim_runs · webhook_events ·            │
+            │  activity_log · system_state            │
+            └────────────────────────────────────────┘
 ```
 
-## Data flow
+**Важно**: collector и simulator существуют как отдельные Go-модули
+(`services/collector`, `services/simulator`), но фактическая работа
+по сбору данных и симуляции живёт **внутри api-gateway** — это
+прагматичное упрощение для текущего масштаба. Отдельные бинарники
+зарезервированы под будущее, когда понадобится разнести нагрузку.
 
-1. **Ingestion.** `collector` consumes `bg_jobs` of kind `collect_history`
-   or `refresh`, pulls workflow runs and jobs from GitHub, persists them in
-   `workflow_runs` / `jobs` / `commits`. Checkpoints are written so the
-   worker resumes on restart.
-2. **Feature engineering.** `ml-service` reads the raw tables, computes a
-   feature vector per job, materialises it into the `features` table (JSONB
-   + a feature version number).
-3. **Training.** A user-triggered training run inserts a `bg_jobs` row of
-   kind `train_model`. The worker streams per-iteration metrics into
-   `training_metrics`; the api-gateway broadcasts them over
-   `/ws/training/:id`. On completion, the model artifact is written to the
-   shared `model-artifacts` volume and a row is added to `models`.
-4. **Prediction.** On a GitHub webhook the api-gateway computes the feature
-   vector for the incoming job, calls `ml-service` `/predict`, writes a row
-   to `predictions`, enqueues the job in Redis (sorted set keyed by the
-   active strategy's score), and broadcasts `job.enqueued` over `/ws/queue`.
-5. **Scheduling.** The scheduler component (inside api-gateway) pops jobs
-   from the active strategy's queue. In hybrid mode it does not execute
-   anything — it records the decision and lets GitHub Actions actually run
-   the job, then back-fills `actual_duration` from the
-   `workflow_run.completed` webhook.
-6. **Simulation.** `simulator` performs offline replay of a historical job
-   stream through all selected strategies, writing rows to `sim_runs`.
+## Поток данных
 
-## Error envelope (UI feedback contract)
+1. **Подключение репозитория.** Пользователь добавляет репозиторий через
+   `POST /api/repos` или `/setup`. api-gateway **автоматически**
+   энкьюит `bg_job` типа `collect_history`.
 
-Every endpoint — Go or Python — returns errors in the same shape:
+2. **Сбор данных.** Background-воркер `io-pool` (1 goroutine) забирает
+   `collect_history` — последовательно тянет страницы GitHub Actions API,
+   делает UPSERT в `workflow_runs`, `jobs`, `commits` с чекпоинтами.
+   При rate-limit (403/429) ждёт reset, прогресс обновляется.
+
+3. **Извлечение фич.** `compute_features` bg_job → ml-service читает
+   `jobs ⨝ workflow_runs ⨝ repos`, считает feature_vector по каждому
+   job'у и записывает в `features` (JSONB, версия схемы фиксирована).
+
+4. **Обучение.** Пользователь создаёт `bg_job` типа `train_model`.
+   api-gateway вызывает ml-service `/train` (или `/train/optuna`).
+   ml-service:
+   - читает features + target из БД,
+   - делает time-based split (80/20),
+   - обучает выбранную модель (Linear / RF / XGBoost / LightGBM / MLP),
+   - стримит per-iteration метрики в `training_metrics`,
+   - сохраняет артефакт в shared volume `model-artifacts`,
+   - записывает строку в `models` с метриками и feature_importance,
+   - предсказывает на тестовой выборке → пишет в `predictions`.
+
+5. **Предсказание.** На webhook `workflow_run.requested` api-gateway
+   вычисляет feature_vector нового job'а, зовёт `ml-service /predict`,
+   пишет результат в `predictions`, броадкастит через `/ws/queue` →
+   фронт показывает карточку прогноза.
+
+6. **Планирование.** Активная модель + активная стратегия (FIFO/SJF/
+   EDF/Custom) определяют порядок job'ов в Redis sorted set по
+   `predicted_sec`. (Гибридный режим — фактическое исполнение всё ещё
+   делает GitHub Actions, мы лишь записываем решение.)
+
+7. **Симуляция.** `POST /api/simulator/run` синхронно: api-gateway
+   читает window из БД, проигрывает event-driven через каждую стратегию,
+   пишет результат в `sim_runs`.
+
+## Канонический формат ошибок (UI feedback contract)
+
+Каждый эндпоинт — Go или Python — возвращает ошибки в одной форме:
 
 ```json
 {
@@ -83,58 +101,109 @@ Every endpoint — Go or Python — returns errors in the same shape:
 }
 ```
 
-The frontend reads `user_action` and surfaces it verbatim in a toast (via
-sonner). Internal codes and stack traces never reach the UI — they live
-in the logs.
+Фронтенд читает `user_action` и показывает его в toast'е через sonner.
+Внутренние коды и стек-трейсы в UI не попадают — они только в логах.
 
-## Background jobs
+## bg_jobs: универсальный механизм фоновых задач
 
-The `bg_jobs` table is the single source of truth for any work that takes
-longer than a request. Every worker — collector, training worker, simulator —
-reads its row, updates `progress / total / message / logs_tail`, and the
-api-gateway streams those updates over `/ws/bg-jobs`. The UI subscribes
-once and renders progress chips wherever they apply.
+Таблица `bg_jobs` — единственный источник истины для любых
+долгих операций (сбор данных, фичи, обучение, симуляция, bootstrap).
+Воркеры читают свой kind, обновляют `progress / total / message`,
+api-gateway транслирует каждое изменение в `/ws/bg-jobs`. Фронтенд
+подписывается на этот канал один раз — карточки прогресса появляются
+везде, где они логически уместны.
 
-## Design system
+**Пулы воркеров** (избегает head-of-line blocking):
 
-> See the plan §7.2 for the full specification. Highlights:
->
-> - Tokens live in `frontend/src/styles/tokens.css` — the only place colours
->   and sizes are defined.
-> - Two fonts: `Inter` (display/UI) + `JetBrains Mono` (every technical
->   value: id, sha, sec, metrics). The mono font is what makes the UI feel
->   like an instrument, not a marketing page.
-> - One accent colour: warm amber `#f2c94c`. Status uses
->   green/amber/red/blue, but only for status — never decoration.
-> - Squared geometry: radius 6–8px, no shadows, no gradients.
-> - Density: row height 36–40 px (Linear-class), not 64 px.
-> - Animation budget: 120ms hover, 180ms entry, 240ms modal. No bouncy
->   springs.
-> - No shadcn-defaults, no MUI-defaults, no purple/blue gradients, no
->   glassmorphism, no decorative icons. These are all signals of
->   "AI-generated" design.
+| Pool    | Воркеров | Kinds                                                                 |
+|---------|----------|------------------------------------------------------------------------|
+| io      | 1        | `collect_history`, `refresh` (GitHub rate-limit делает параллелизм вредным) |
+| compute | 3        | `bootstrap`, `compute_features`, `train_model`, `simulate`             |
 
-## WebSocket channels
+Bootstrap-orchestrator живёт в `compute` пуле и **сам ждёт** между
+фазами через polling `bg_jobs.status` — это гарантирует, что
+`train_model` не запустится пока `collect_history` не завершилась.
 
-| Channel | Purpose |
+## WebSocket-каналы
+
+| Канал | Назначение |
 |---|---|
-| `/ws/bootstrap`        | First-run setup progress. |
-| `/ws/bg-jobs`          | Progress for any background job. |
-| `/ws/queue`            | Live queue + push feed (for `/dashboard`). |
-| `/ws/training/:id`     | Per-iteration metrics + log tail for a training run. |
+| `/ws/bootstrap`        | Прогресс bootstrap-чейна. |
+| `/ws/bg-jobs`          | Прогресс любого фонового job'а. |
+| `/ws/queue`            | Live-очередь + webhook-feed для `/dashboard`. |
+| `/ws/training/:id`     | Per-iteration loss/RMSE для конкретного training run. |
 
-All channels broadcast JSON messages; the api-gateway maintains a
-fan-out from Redis Pub/Sub to active WebSocket subscribers.
+Все каналы транслируют JSON-сообщения. api-gateway держит in-process
+pub/sub (sync.RWMutex + buffered channels). Когда понадобится горизонтальное
+масштабирование — Redis Pub/Sub уже подключён, останется добавить мост.
 
-## Why Go + Python (not one language)
+## База данных
 
-- **Go** for everything I/O-shaped: HTTP server, Postgres pool, Redis
-  pub/sub, GitHub API ingestion, WebSocket fanout. Cheap goroutines,
-  predictable latency.
-- **Python** for ML: every relevant library (XGBoost, LightGBM, PyTorch,
-  Optuna) is best-in-class here, and ad-hoc analysis in `ml/notebooks/`
-  shares the same environment as the service.
+Ключевые таблицы (`db/migrations/`):
 
-The boundary is intentional and narrow: api-gateway calls `ml-service`
-over HTTP (JSON in / out). No shared code, no shared types — only the
-DB schema and the error envelope as contracts.
+- `repos` — подключённые репозитории, статус сбора, denormalised counters.
+- `workflow_runs`, `jobs`, `commits` — сырые данные GitHub Actions.
+- `features` — материализованные feature_vectors (JSONB + версия схемы).
+- `models` — обученные модели + метрики + feature_importance.
+- `predictions` — `(job_id, model_id) → predicted_sec`.
+- `bg_jobs` — все фоновые операции с прогрессом.
+- `training_metrics` — per-iteration `(train_loss, val_rmse, val_mae)`.
+- `sim_runs` — результаты симуляций стратегий.
+- `webhook_events` — последние 50 GitHub webhook'ов с результатом HMAC.
+- `activity_log` — журнал пользовательских действий для `/admin`.
+- `system_state` — single-row settings (`bootstrap_done`,
+  `active_strategy`, `custom_weights`).
+
+Миграции встроены в api-gateway (`go:embed`) и накатываются на старте.
+Внешний инструмент типа goose-CLI не нужен.
+
+## Дизайн-система
+
+> Полная спецификация — в плане проекта. Ключевое:
+>
+> - Дизайн-токены в `frontend/src/styles/tokens.css` — единственное
+>   место, где определены цвета, шрифты, размеры.
+> - Два шрифта: **Inter** (UI/display) + **JetBrains Mono** (все
+>   технические значения: id, sha, sec, метрики). Моноширинный шрифт
+>   и делает интерфейс похожим на инструмент, а не на маркетинговую
+>   страницу.
+> - Один акцентный цвет: тёплый янтарь `#F2C94C`. Статусные цвета
+>   (зелёный/жёлтый/красный/синий) — только для статусов, не для
+>   декора.
+> - Углы 6–8px, без теней, без градиентов.
+> - Плотность Linear-уровня (строка таблицы 36–40 px).
+> - Анимации: 120 мс hover, 180 мс entry, 240 мс modal. Без bouncy-springs.
+> - Никаких shadcn-дефолтов, MUI-дефолтов, фиолетово-синих градиентов
+>   и glassmorphism. Эти штуки сигналят «сгенерировано шаблоном».
+
+## i18n
+
+Простая собственная реализация без библиотек, всё в `frontend/src/i18n/`:
+
+- `types.ts` — TypeScript-union всех ключей перевода. Если в `en.ts`
+  или `ru.ts` пропущен ключ — TS падает на билде.
+- `en.ts` / `ru.ts` — плоские словари.
+- `index.tsx` — `LocaleProvider`, `useT()`, `<LanguageSwitcher />`.
+
+Локаль хранится в `localStorage["cicd-ml.locale"]`. Первый визит
+автоопределяется по `navigator.language` (всё, что начинается с `ru-`
+— русский, остальное английский).
+
+`<LanguageSwitcher compact />` смонтирован в:
+1. шапке `AppShell` (доступен на любой странице кроме `/setup`),
+2. `/setup` (правый верхний угол, чтобы выбрать язык до онбординга).
+
+## Почему Go + Python (а не один язык)
+
+- **Go** для всего I/O-bound: HTTP-сервер, Postgres pool, Redis pub/sub,
+  ингест GitHub API, WebSocket fan-out. Дешёвые горутины,
+  предсказуемая латентность. Здесь же scheduler и simulator —
+  алгоритмически чистая логика, которой удобно жить в одной БД с
+  ингестом.
+- **Python** для ML: каждая нужная библиотека (XGBoost, LightGBM,
+  scikit-learn, Optuna, matplotlib) здесь best-in-class. Ad-hoc анализ
+  в `ml/notebooks/` использует то же окружение что и сервис.
+
+Граница узкая: api-gateway зовёт ml-service через HTTP (JSON в обе
+стороны). Никакого shared-кода — только схема БД и формат ошибок
+выступают контрактом.

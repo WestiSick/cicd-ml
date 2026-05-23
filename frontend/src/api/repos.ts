@@ -23,9 +23,36 @@ export async function listRepos(): Promise<Repo[]> {
   return r.repos;
 }
 
-export async function addRepo(input: { url: string; branches?: string[] }): Promise<Repo> {
+export type AddRepoInput = {
+  url: string;
+  branches?: string[];
+  history_months?: 3 | 6 | 12;
+  github_token?: string;
+  /** When omitted (default), the backend auto-enqueues a collect_history
+   *  bg_job so the new repo starts fetching immediately. Pass `false` to
+   *  defer that and only sync explicitly. */
+  auto_sync?: boolean;
+};
+
+export async function addRepo(input: AddRepoInput): Promise<Repo> {
   return await api<Repo>("/api/repos", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export type SyncRepoResponse = {
+  bg_job_id: number;
+  repo_id: number;
+  message: string;
+};
+
+export async function syncRepo(
+  id: number,
+  opts: { history_months?: 3 | 6 | 12; github_token?: string } = {},
+): Promise<SyncRepoResponse> {
+  return await api<SyncRepoResponse>(`/api/repos/${id}/sync`, {
+    method: "POST",
+    body: JSON.stringify(opts),
   });
 }

@@ -8,19 +8,25 @@ import {
 } from "lucide-react";
 
 import { HealthDot } from "./HealthDot";
+import { LanguageSwitcher, useT } from "@/i18n";
 import styles from "./AppShell.module.css";
 
 /* AppShell is the persistent chrome around all authenticated pages.
  *
  * Layout follows the page template in docs/architecture.md:
- *   ┌─ TopBar (mono breadcrumb · health) ─┐
- *   │ Sidebar │ Page content              │
- *   └─────────┴───────────────────────────┘
+ *   ┌─ TopBar (mono breadcrumb · health · lang) ─┐
+ *   │ Sidebar │ Page content                     │
+ *   └─────────┴──────────────────────────────────┘
  *
  * The breadcrumb is monospace by design — it reinforces the "instrument"
  * aesthetic and gives the eye a stable anchor for path comparisons.
+ *
+ * Language switcher is mounted in two places:
+ *   - top bar (compact EN/RU pill) for one-click access from any page
+ *   - sidebar footer for completeness, paired with the version label
  */
 export function AppShell() {
+  const t = useT();
   const location = useLocation();
   const crumb = location.pathname === "/" ? "/dashboard" : location.pathname;
 
@@ -33,18 +39,19 @@ export function AppShell() {
           <span className={styles.crumb}>{crumb}</span>
         </div>
         <div className={styles.topbarRight}>
+          <LanguageSwitcher compact />
           <HealthDot />
         </div>
       </header>
 
       <aside className={styles.sidebar}>
         <nav className={styles.nav}>
-          <SidebarLink to="/dashboard" icon={<LayoutDashboard size={14} strokeWidth={1.5} />} label="Dashboard" />
-          <SidebarLink to="/datasets"  icon={<Database size={14} strokeWidth={1.5} />}        label="Datasets"  />
-          <SidebarLink to="/experiments" icon={<FlaskConical size={14} strokeWidth={1.5} />}  label="Experiments" />
-          <SidebarLink to="/simulator" icon={<Activity size={14} strokeWidth={1.5} />}        label="Simulator" />
+          <SidebarLink to="/dashboard"   icon={<LayoutDashboard size={14} strokeWidth={1.5} />} label={t("nav.dashboard")} />
+          <SidebarLink to="/datasets"    icon={<Database size={14} strokeWidth={1.5} />}        label={t("nav.datasets")} />
+          <SidebarLink to="/experiments" icon={<FlaskConical size={14} strokeWidth={1.5} />}    label={t("nav.experiments")} />
+          <SidebarLink to="/simulator"   icon={<Activity size={14} strokeWidth={1.5} />}        label={t("nav.simulator")} />
           <div className={styles.navSpacer} />
-          <SidebarLink to="/admin"     icon={<Settings size={14} strokeWidth={1.5} />}        label="Admin"     />
+          <SidebarLink to="/admin"       icon={<Settings size={14} strokeWidth={1.5} />}        label={t("nav.admin")} />
         </nav>
         <div className={styles.sidebarFooter}>
           <span className="mono">v0.1.0</span>

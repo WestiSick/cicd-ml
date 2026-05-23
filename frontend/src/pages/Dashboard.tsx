@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { Button } from "@/components/Button";
 import { StatusChip } from "@/components/StatusChip";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { useT } from "@/i18n";
 
 type QueueEvent = {
   type: string;
@@ -29,6 +30,7 @@ type QueueEvent = {
  * visible in /datasets (per-repo history) anyway. Keeps the page snappy
  * during heavy push windows. */
 export function Dashboard() {
+  const t = useT();
   const [events, setEvents] = useState<QueueEvent[]>([]);
 
   const { connected } = useWebSocket("/ws/queue", (msg) => {
@@ -51,9 +53,9 @@ export function Dashboard() {
   return (
     <>
       <PageHeader
-        title="Dashboard"
-        subtitle="Live queue and predictions across all tracked repositories."
-        actions={<Button variant="secondary" disabled>Pause queue</Button>}
+        title={t("dashboard.title")}
+        subtitle={t("dashboard.subtitle")}
+        actions={<Button variant="secondary" disabled>{t("common.pause_queue")}</Button>}
       />
 
       <section
@@ -64,21 +66,21 @@ export function Dashboard() {
           marginBottom: "var(--s-6)",
         }}
       >
-        <Kpi label="Active model" value="—" hint="not trained yet" />
-        <Kpi label="Strategy" value="—" hint="not configured" />
-        <Kpi label="Live feed" value={connected ? "online" : "offline"} hint={connected ? "/ws/queue connected" : "reconnecting…"} />
-        <Kpi label="Recent events" value={String(events.length)} />
+        <Kpi label={t("dashboard.kpi.active_model")} value="—" hint={t("dashboard.kpi.not_trained")} />
+        <Kpi label={t("dashboard.kpi.strategy")} value="—" hint={t("dashboard.kpi.not_configured")} />
+        <Kpi
+          label={t("dashboard.kpi.live_feed")}
+          value={connected ? t("common.online") : t("common.offline")}
+          hint={connected ? t("dashboard.kpi.ws_connected") : t("dashboard.kpi.reconnecting")}
+        />
+        <Kpi label={t("dashboard.kpi.recent_events")} value={String(events.length)} />
       </section>
 
-      <h2 style={sectionTitleStyle}>Live feed</h2>
+      <h2 style={sectionTitleStyle}>{t("dashboard.live_feed")}</h2>
       {events.length === 0 ? (
         <EmptyState
-          title="Waiting for webhook events."
-          hint={
-            connected
-              ? "Push a commit to a tracked repository, or POST a test event to /webhooks/github. The dashboard reacts in 1–2 seconds without a page refresh."
-              : "WebSocket is reconnecting. Check the health dot in the top bar; if it's red, the API is unreachable."
-          }
+          title={t("dashboard.empty.title")}
+          hint={connected ? t("dashboard.empty.hint_connected") : t("dashboard.empty.hint_disconnected")}
         />
       ) : (
         <Card>

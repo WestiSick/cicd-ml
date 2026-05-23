@@ -89,6 +89,7 @@ func (s *Server) buildRouter() chi.Router {
 		// Repositories.
 		r.Get("/repos", s.listRepos)
 		r.Post("/repos", s.addRepo)
+		r.Post("/repos/{id}/sync", s.syncRepo)
 
 		// Setup / bootstrap.
 		r.Post("/setup/start", s.startSetup)

@@ -8,26 +8,41 @@ import { StatusChip } from "@/components/StatusChip";
 import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
 import { ApiError } from "@/api/client";
-import { addRepo, listRepos, type Repo } from "@/api/repos";
+import { addRepo, listRepos, syncRepo, type Repo } from "@/api/repos";
+import { useWebSocket } from "@/hooks/useWebSocket";
+import { useT } from "@/i18n";
 
 export function Datasets() {
+  const t = useT();
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["repos"], queryFn: listRepos });
+  const q = useQuery({
+    queryKey: ["repos"],
+    queryFn: listRepos,
+    // Repos update as the collector reports progress — poll modestly so
+    // the runs/jobs counters move while the user watches.
+    refetchInterval: 5_000,
+  });
+
+  // Any bg-jobs update can affect repo counters (collect_history bumps
+  // them on every page). Cheap to refresh on ws push.
+  useWebSocket("/ws/bg-jobs", () => {
+    qc.invalidateQueries({ queryKey: ["repos"] });
+  });
 
   const [showAdd, setShowAdd] = useState(false);
 
   return (
     <>
       <PageHeader
-        title="Datasets"
-        subtitle="Tracked repositories and the historical jobs collected for training."
+        title={t("datasets.title")}
+        subtitle={t("datasets.subtitle")}
         actions={
           <>
             <Button variant="ghost" disabled>
-              Compute features
+              {t("datasets.compute_features")}
             </Button>
             <Button variant="primary" onClick={() => setShowAdd(true)}>
-              Add repository
+              {t("datasets.add")}
             </Button>
           </>
         }
@@ -54,29 +69,67 @@ export function Datasets() {
 
       {q.data && q.data.length === 0 && !showAdd && (
         <EmptyState
-          title="No repositories tracked yet."
-          hint="Add one to start collecting CI history. Public repositories work without a token but slowly; supply a PAT in /admin for the full 5000 req/h limit."
-          action={<Button variant="primary" onClick={() => setShowAdd(true)}>Add your first repository</Button>}
+          title={t("datasets.empty.title")}
+          hint={t("datasets.empty.hint")}
+          action={<Button variant="primary" onClick={() => setShowAdd(true)}>{t("datasets.empty.action")}</Button>}
         />
       )}
 
       {q.data && q.data.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s-3)" }}>
-          {q.data.map((r) => <RepoCard key={r.id} repo={r} />)}
+          {q.data.map((r) => (
+            <RepoCard
+              key={r.id}
+              repo={r}
+              onSynced={() => qc.invalidateQueries({ queryKey: ["repos"] })}
+            />
+          ))}
         </div>
       )}
     </>
   );
 }
 
-function RepoCard({ repo }: { repo: Repo }) {
+function RepoCard({ repo, onSynced }: { repo: Repo; onSynced: () => void }) {
+  const t = useT();
+  const sync = useMutation({
+    mutationFn: () => syncRepo(repo.id),
+    onSuccess: (r) => {
+      toast.success(t("datasets.toast.sync_queued", { slug: `${repo.owner}/${repo.name}` }), {
+        description: r.message,
+      });
+      onSynced();
+    },
+    onError: (err: unknown) => {
+      if (err instanceof ApiError) toast.error(err.message, { description: err.userAction });
+      else toast.error("sync failed");
+    },
+  });
+
+  // A "Sync" action makes sense whenever the repo isn't actively being
+  // fetched. fetching/running cards already show progress — extra
+  // button would only let the user double-queue work for nothing.
+  const canSync = repo.status !== "fetching";
+
   return (
-    <Card interactive>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <Card>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "var(--s-2)" }}>
         <div className="mono" style={{ fontSize: "var(--fs-14)", fontWeight: 500 }}>
           {repo.owner}/{repo.name}
         </div>
-        <StatusChip status={repo.status} />
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+          {canSync && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => sync.mutate()}
+              loading={sync.isPending}
+            >
+              {repo.status === "idle" ? t("common.start_sync") : t("common.sync")}
+            </Button>
+          )}
+          <StatusChip status={repo.status} />
+        </div>
       </div>
       <div
         style={{
@@ -86,10 +139,10 @@ function RepoCard({ repo }: { repo: Repo }) {
           marginTop: "var(--s-3)",
         }}
       >
-        <Stat label="Runs" value={repo.runs_count.toLocaleString()} mono />
-        <Stat label="Jobs" value={repo.jobs_count.toLocaleString()} mono />
+        <Stat label={t("datasets.card.runs")} value={repo.runs_count.toLocaleString()} mono />
+        <Stat label={t("datasets.card.jobs")} value={repo.jobs_count.toLocaleString()} mono />
         <Stat
-          label="Added"
+          label={t("datasets.card.added")}
           value={new Date(repo.added_at).toISOString().slice(0, 10)}
           mono
           small
@@ -163,20 +216,27 @@ function AddRepoBlock({
   onClose: () => void;
   onAdded: () => void;
 }) {
+  const t = useT();
   const [url, setUrl] = useState("");
+  const [token, setToken] = useState("");
+  const [months, setMonths] = useState<3 | 6 | 12>(6);
 
   const m = useMutation({
-    mutationFn: () => addRepo({ url }),
+    mutationFn: () =>
+      addRepo({
+        url,
+        history_months: months,
+        github_token: token || undefined,
+      }),
     onSuccess: (r) => {
-      toast.success(`Repository added: ${r.owner}/${r.name}`);
+      toast.success(t("datasets.toast.added", { slug: `${r.owner}/${r.name}` }), {
+        description: t("datasets.toast.added_desc"),
+      });
       onAdded();
     },
     onError: (err: unknown) => {
-      if (err instanceof ApiError) {
-        toast.error(err.message, { description: err.userAction });
-      } else {
-        toast.error("Could not add repository.");
-      }
+      if (err instanceof ApiError) toast.error(err.message, { description: err.userAction });
+      else toast.error("add failed");
     },
   });
 
@@ -191,34 +251,81 @@ function AddRepoBlock({
       }}
     >
       <div className="caps" style={{ color: "var(--text-tertiary)", marginBottom: "var(--s-2)" }}>
-        Add repository
+        {t("datasets.add.title")}
       </div>
-      <div style={{ display: "flex", gap: "var(--s-2)" }}>
+
+      <div style={{ display: "flex", gap: "var(--s-2)", marginBottom: "var(--s-3)" }}>
         <input
           autoFocus
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://github.com/owner/repo"
+          placeholder={t("datasets.add.url_placeholder")}
           spellCheck={false}
-          style={{
-            flex: 1,
-            height: 32,
-            background: "var(--bg-base)",
-            border: "1px solid var(--border-subtle)",
-            borderRadius: "var(--r-6)",
-            padding: "0 var(--s-3)",
-            color: "var(--text-primary)",
-            fontFamily: "var(--font-mono)",
-            fontSize: "var(--fs-13)",
-            outline: "none",
-          }}
-          onKeyDown={(e) => e.key === "Enter" && m.mutate()}
+          style={inputStyle}
+          onKeyDown={(e) => e.key === "Enter" && url && m.mutate()}
         />
-        <Button variant="secondary" onClick={onClose}>Cancel</Button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s-3)" }}>
+        <div>
+          <div className="caps" style={labelStyle}>{t("datasets.add.window")}</div>
+          <div style={{ display: "flex", gap: "var(--s-2)" }}>
+            {([3, 6, 12] as const).map((n) => (
+              <button key={n} type="button" onClick={() => setMonths(n)} style={pillStyle(months === n)}>
+                {t("setup.months", { n })}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="caps" style={labelStyle}>{t("datasets.add.token")}</div>
+          <input
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder={t("datasets.add.token_placeholder")}
+            spellCheck={false}
+            style={inputStyle}
+          />
+        </div>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--s-2)", marginTop: "var(--s-4)" }}>
+        <Button variant="secondary" onClick={onClose}>{t("common.cancel")}</Button>
         <Button variant="primary" onClick={() => m.mutate()} loading={m.isPending} disabled={!url}>
-          Add
+          {t("datasets.add.submit")}
         </Button>
       </div>
     </div>
   );
+}
+
+const inputStyle: React.CSSProperties = {
+  flex: 1,
+  width: "100%",
+  height: 32,
+  background: "var(--bg-base)",
+  border: "1px solid var(--border-subtle)",
+  borderRadius: "var(--r-6)",
+  padding: "0 var(--s-3)",
+  color: "var(--text-primary)",
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--fs-13)",
+  outline: "none",
+};
+
+const labelStyle: React.CSSProperties = { color: "var(--text-tertiary)", marginBottom: "var(--s-2)" };
+
+function pillStyle(active: boolean): React.CSSProperties {
+  return {
+    height: 30,
+    padding: "0 12px",
+    background: active ? "var(--bg-base)" : "transparent",
+    color: active ? "var(--text-primary)" : "var(--text-secondary)",
+    border: `1px solid ${active ? "var(--border-strong)" : "var(--border-subtle)"}`,
+    borderRadius: "var(--r-6)",
+    fontSize: "var(--fs-13)",
+    cursor: "pointer",
+    boxShadow: active ? "inset 0 0 0 1px var(--accent-soft)" : undefined,
+  };
 }

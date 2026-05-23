@@ -165,7 +165,7 @@ func trainHandler(mlClient *ml.Client) bgjobs.Handler {
 				return err
 			}
 			progress(2, 3, fmt.Sprintf("best_mae=%.1fs after %d trials", resp.BestMetrics["mae_test_sec"], resp.NTrials), "")
-			progress(3, 3, fmt.Sprintf("done — model_id=%d", resp.ModelID), "")
+			progress(3, 3, fmt.Sprintf("done — %s (model #%d)", resp.Name, resp.ModelID), "")
 			return nil
 		}
 
@@ -184,8 +184,8 @@ func trainHandler(mlClient *ml.Client) bgjobs.Handler {
 			return err
 		}
 
-		progress(2, 3, fmt.Sprintf("trained model #%d (test_mae=%.1fs)", resp.ModelID, resp.Metrics["mae_test_sec"]), "")
-		progress(3, 3, fmt.Sprintf("done — model_id=%d", resp.ModelID), "")
+		progress(2, 3, fmt.Sprintf("trained %s (model #%d) — test_mae=%.1fs", resp.Name, resp.ModelID, resp.Metrics["mae_test_sec"]), "")
+		progress(3, 3, fmt.Sprintf("done — %s (model #%d)", resp.Name, resp.ModelID), "")
 		return nil
 	}
 }
