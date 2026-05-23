@@ -36,11 +36,24 @@ services:
 
   ml:
     build:
+      # ml-service Dockerfile only has `prod` stage — same name as the
+      # api-gateway's `prod` but different image (FastAPI vs Go bin).
       target: prod
 
+  # NB: target names below MUST match the stages in
+  # services/api-gateway/Dockerfile — `collector-prod` and
+  # `simulator-prod` are distroless single-binary images. Without these
+  # explicit overrides, the prod compose would inherit the base's
+  # target (which is the same), but listing them makes the prod stack
+  # self-documenting and prevents a future "target: prod" mistake from
+  # silently rebuilding collector as api-gateway.
   collector:
     build:
-      target: prod
+      target: collector-prod
+
+  simulator:
+    build:
+      target: simulator-prod
 
   frontend:
     build:
