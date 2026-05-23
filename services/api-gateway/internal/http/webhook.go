@@ -234,15 +234,19 @@ func (s *Server) ensureCommitForWebhook(parent context.Context, owner, name, hea
 	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 	defer cancel()
 
-	exists, err := s.db.CommitExists(ctx, headSHA)
+	// CommitFullyCached (not CommitExists) so a SHA whose `commits` row
+	// exists but whose `commit_files` were never populated (pre-Task-C
+	// data, or a previous webhook that crashed between the two inserts)
+	// still gets enriched — we want commit-content features available
+	// for predict, not just the aggregate counts.
+	cached, err := s.db.CommitFullyCached(ctx, headSHA)
 	if err != nil {
-		log.Warn().Err(err).Str("sha", headSHA).Msg("webhook: commit_exists check failed")
+		log.Warn().Err(err).Str("sha", headSHA).Msg("webhook: commit_cache check failed")
 		return
 	}
-	if exists {
-		// Already populated by an earlier webhook for the same SHA or by
-		// the collector. commit_files rows came in via the same path so
-		// the predict will see them.
+	if cached {
+		// commits + commit_files both present — predict will see the
+		// bucket features without us touching GitHub.
 		return
 	}
 

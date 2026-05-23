@@ -300,7 +300,12 @@ func (s *Syncer) processRun(ctx context.Context, repoID int64, owner, name strin
 	// (matrix builds → many workflow_runs share head_sha). Errors are
 	// non-fatal: feature engineering tolerates NULLs in the commit fields.
 	if r.HeadSHA != "" {
-		if exists, _ := s.DB.CommitExists(ctx, r.HeadSHA); !exists {
+		// CommitFullyCached (not CommitExists) so SHAs whose `commits` row
+		// exists but whose `commit_files` were never populated (pre-Task-C
+		// data) get re-fetched once and enriched. Otherwise Re-sync from
+		// scratch would never backfill commit-content features for
+		// historical jobs — the model would keep training on zeros.
+		if cached, _ := s.DB.CommitFullyCached(ctx, r.HeadSHA); !cached {
 			c, rl, cerr := s.Client.GetCommit(ctx, owner, name, r.HeadSHA)
 			if rlErr := s.handleRateLimit(ctx, cerr, rl, progress); rlErr != nil {
 				return rlErr

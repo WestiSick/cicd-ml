@@ -50,10 +50,36 @@ func (d *DB) UpsertCommit(ctx context.Context, p UpsertCommitParams) error {
 // CommitExists is a cheap pre-flight to avoid re-fetching a SHA the
 // collector has already pulled. Saves a GitHub API token per duplicate
 // workflow_run pointing at the same SHA (very common — matrix builds).
+//
+// NOTE: prefer CommitFullyCached for new code — by itself this returns
+// true for SHAs whose `commits` row exists but whose `commit_files` rows
+// were never populated (everything ingested before the commit_files
+// table existed in migration 00004). Re-sync paths that want to backfill
+// per-file diffs MUST use CommitFullyCached, otherwise they keep
+// short-circuiting on the historical commits we need to enrich.
 func (d *DB) CommitExists(ctx context.Context, sha string) (bool, error) {
 	var exists bool
 	err := d.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM commits WHERE sha = $1)`, sha).Scan(&exists)
 	return exists, err
+}
+
+// CommitFullyCached returns true only when BOTH the `commits` row and
+// at least one `commit_files` row exist for this SHA. Use this as the
+// skip-guard in collector/webhook paths so that commits which predate
+// the per-file-diff schema get re-fetched once and then cached forever.
+//
+// The "at least one commit_files row" check is correct because GitHub
+// always returns a non-empty Files[] array for any non-merge commit
+// (and merge commits are rare in CI-triggering pushes); a SHA with zero
+// commit_files rows is almost certainly a pre-migration artefact, not
+// a legitimate empty diff.
+func (d *DB) CommitFullyCached(ctx context.Context, sha string) (bool, error) {
+	var ok bool
+	err := d.Pool.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM commits WHERE sha = $1)
+		   AND EXISTS(SELECT 1 FROM commit_files WHERE sha = $1)
+	`, sha).Scan(&ok)
+	return ok, err
 }
 
 // CommitFileParams is one row for the per-file diff table. The ml-
