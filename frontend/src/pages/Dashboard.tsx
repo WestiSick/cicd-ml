@@ -43,6 +43,10 @@ type QueueEvent = {
 export function Dashboard() {
   const t = useT();
   const [events, setEvents] = useState<QueueEvent[]>([]);
+  // Active queue collapsed by default — historical in_progress jobs from
+  // the initial collect can fill it noisily and the dashboard is more
+  // useful when the live feed is the focal point.
+  const [queueOpen, setQueueOpen] = useState(false);
 
   // System state — gives us the active model id/algo/MAE and the active
   // strategy. Polled at 5s; refresh isn't critical, the values only change
@@ -156,25 +160,8 @@ export function Dashboard() {
         </Card>
       </section>
 
-      <h2 style={sectionTitleStyle}>
-        {t("dashboard.queue")}
-        <span style={{ marginLeft: 8, color: "var(--text-tertiary)", fontSize: "var(--fs-12)", fontWeight: 400 }}>
-          {activeCards.length > 0 ? `(${activeCards.length})` : ""}
-        </span>
-      </h2>
-      {activeCards.length === 0 ? (
-        <EmptyState
-          title={t("dashboard.queue.empty.title")}
-          hint={t("dashboard.queue.empty.hint")}
-        />
-      ) : (
-        <div style={{ display: "grid", gap: "var(--s-2)", marginBottom: "var(--s-6)" }}>
-          {activeCards.map((c, i) => (
-            <QueueCard key={c.run_id ?? c.job_id ?? i} data={c} fresh={i < 1 && c.status === "in_progress"} />
-          ))}
-        </div>
-      )}
-
+      {/* Live feed first — the main "what's happening RIGHT NOW" signal.
+          Webhook events stream in here as GitHub pushes them. */}
       <h2 style={sectionTitleStyle}>{t("dashboard.live_feed")}</h2>
       {events.length === 0 ? (
         <EmptyState
@@ -189,6 +176,63 @@ export function Dashboard() {
             ))}
           </div>
         </Card>
+      )}
+
+      {/* Active queue — collapsible, default closed. The queue snapshot
+          can include historical jobs that were `in_progress` at collect
+          time and never got their completed-state pulled (the collector
+          only fetches jobs for runs with status=completed, so an
+          in-flight run at sync time stays in_progress in our DB
+          forever). Tucking it away keeps the dashboard focused on
+          actual live activity. */}
+      <h2 style={{ ...sectionTitleStyle, marginTop: "var(--s-6)" }}>
+        <button
+          onClick={() => setQueueOpen((o) => !o)}
+          aria-expanded={queueOpen}
+          style={{
+            background: "none",
+            border: "none",
+            color: "inherit",
+            cursor: "pointer",
+            padding: 0,
+            font: "inherit",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              display: "inline-block",
+              width: 12,
+              textAlign: "center",
+              color: "var(--text-tertiary)",
+              transform: queueOpen ? "rotate(90deg)" : "none",
+              transition: "transform var(--t-hover) var(--ease)",
+            }}
+          >
+            ›
+          </span>
+          {t("dashboard.queue")}
+          <span style={{ color: "var(--text-tertiary)", fontSize: "var(--fs-12)", fontWeight: 400 }}>
+            {activeCards.length > 0 ? `(${activeCards.length})` : ""}
+          </span>
+        </button>
+      </h2>
+      {queueOpen && (
+        activeCards.length === 0 ? (
+          <EmptyState
+            title={t("dashboard.queue.empty.title")}
+            hint={t("dashboard.queue.empty.hint")}
+          />
+        ) : (
+          <div style={{ display: "grid", gap: "var(--s-2)" }}>
+            {activeCards.map((c, i) => (
+              <QueueCard key={c.run_id ?? c.job_id ?? i} data={c} fresh={i < 1 && c.status === "in_progress"} />
+            ))}
+          </div>
+        )
       )}
     </>
   );

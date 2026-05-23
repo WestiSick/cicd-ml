@@ -534,6 +534,12 @@ func (s *Server) queueSnapshot(w http.ResponseWriter, r *http.Request) {
 		ActualSec    *int     `json:"actual_sec,omitempty"`
 	}
 
+	// We cap the "queued/in_progress/etc" branch to the last 24h. Without
+	// this filter the collector's snapshot of any run that was in-flight
+	// at sync time stays in_progress in our DB forever (the collector
+	// only fetches jobs for runs with status=completed, so an unfinished
+	// run never gets its terminal state pulled). Showing those forever
+	// pollutes the dashboard with zombies.
 	rows, err := s.db.Pool.Query(r.Context(), `
 		SELECT
 			j.id,
@@ -555,7 +561,10 @@ func (s *Server) queueSnapshot(w http.ResponseWriter, r *http.Request) {
 			ORDER BY p2.made_at DESC
 			LIMIT 1
 		) p ON TRUE
-		WHERE j.status IN ('queued','in_progress','requested','waiting')
+		WHERE (
+		         j.status IN ('queued','in_progress','requested','waiting')
+		         AND COALESCE(j.started_at, w.created_at) > now() - interval '24 hours'
+		      )
 		   OR (j.status = 'completed' AND j.completed_at > now() - interval '5 minutes')
 		ORDER BY COALESCE(j.started_at, w.created_at) DESC
 		LIMIT $1
