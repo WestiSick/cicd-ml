@@ -36,6 +36,12 @@ services:
       context: .
       dockerfile: services/api-gateway/Dockerfile
     restart: unless-stopped
+    # See collector below for why we pin DNS. The api-gateway also
+    # talks to api.github.com (webhook auto-install on POST /api/repos)
+    # so it gets the same treatment.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     environment:
       POSTGRES_DSN: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?sslmode=disable
       REDIS_ADDR: ${REDIS_HOST}:${REDIS_PORT}
@@ -68,12 +74,21 @@ services:
   # bg_jobs. Built from the same Go module as the api-gateway (shared
   # internal packages); separate container so long-running GitHub API
   # pulls don't share goroutine schedulers with user-facing HTTP traffic.
+  #
+  # DNS override: the collector talks to api.github.com from inside its
+  # container. On hosts where systemd-resolved or the OS resolver is
+  # flaky, Docker's embedded 127.0.0.11 resolver forwards to a broken
+  # upstream and we get `lookup api.github.com on 127.0.0.11:53: server
+  # misbehaving`. Pinning public resolvers here is a safe escape hatch.
   collector:
     build:
       context: .
       dockerfile: services/api-gateway/Dockerfile
       target: collector-prod
     restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     environment:
       POSTGRES_DSN: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?sslmode=disable
       # Workers push WS broadcasts to the gateway via this URL. In-docker

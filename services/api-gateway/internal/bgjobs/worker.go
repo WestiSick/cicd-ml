@@ -149,9 +149,13 @@ func (r *Runner) WithPools(pools []Pool) *Runner {
 // dedicated workers always win the SKIP LOCKED race.
 //
 // If allowed is empty, every pool is left as-is (single-binary mode).
-// A pool whose entire Kinds list is filtered out gets a zero-length
-// Kinds slice — the SQL `kind = ANY('{}')` matches nothing, so the
-// pool's workers idle without errors.
+//
+// Pools whose entire Kinds list is filtered out are DROPPED — not kept
+// with an empty Kinds slice. The reason: `ClaimNextBGJobByKinds(ctx, [])`
+// treats nil/empty as "no filter" and claims any kind. Keeping an
+// empty-Kinds pool around would result in workers stealing jobs they
+// don't have handlers for (collector grabbing train_model, etc.).
+// This was the bug fixed alongside the prod deployment.
 func (r *Runner) RestrictKinds(allowed map[string]bool) *Runner {
 	if len(allowed) == 0 {
 		return r
@@ -163,6 +167,12 @@ func (r *Runner) RestrictKinds(allowed map[string]bool) *Runner {
 			if allowed[k] {
 				filtered = append(filtered, k)
 			}
+		}
+		if len(filtered) == 0 {
+			// Pool is completely filtered out — don't start workers for it.
+			// This is what prevents "no handler registered" warnings in the
+			// standalone collector / simulator binaries.
+			continue
 		}
 		p.Kinds = filtered
 		newPools = append(newPools, p)
@@ -208,6 +218,15 @@ func (r *Runner) workerLoop(ctx context.Context, p Pool, id string) {
 }
 
 func (r *Runner) dispatchOnce(ctx context.Context, p Pool, workerID string) {
+	// Defense-in-depth — a pool with empty Kinds means "this pool was
+	// fully filtered out by RestrictKinds and should not claim anything".
+	// We re-check here because ClaimNextBGJobByKinds([]) would otherwise
+	// fall back to claim-any behaviour and steal jobs we have no handler
+	// for. RestrictKinds already drops such pools entirely, so this is
+	// belt-and-braces.
+	if len(p.Kinds) == 0 {
+		return
+	}
 	// Operator pause-flag honoured cooperatively. We check once per
 	// poll tick — when paused, the worker just idles without claiming.
 	// In-flight jobs continue running; only new claims are suppressed.
