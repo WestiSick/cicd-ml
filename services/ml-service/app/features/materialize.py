@@ -26,7 +26,6 @@ import json
 import logging
 from typing import Any
 
-import numpy as np
 from sqlalchemy import text
 
 from ..features.build import FEATURE_VERSION, fit_schema, transform

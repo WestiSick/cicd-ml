@@ -19,9 +19,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "1.23"
           cache: true
           cache-dependency-path: services/api-gateway/go.sum
+      # The api-gateway's migrations.go uses `//go:embed migrations/*.sql`
+      # relative to the source file. The canonical SQL lives at
+      # db/migrations/ (single source of truth); the Dockerfile copies
+      # it into the embed path at build time. CI needs the same copy
+      # step before `go build`, otherwise embed errors with
+      # "pattern migrations/*.sql: no matching files found".
+      - name: copy migrations into embed path
+        run: |
+          mkdir -p services/api-gateway/internal/store/migrations
+          cp db/migrations/*.sql services/api-gateway/internal/store/migrations/
       - name: go build
         working-directory: services/api-gateway
         run: go build ./...
@@ -31,7 +41,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.59
+          version: v1.61
           working-directory: services/api-gateway
           # We accept some warnings — repo is a thesis project, not enterprise SaaS.
           args: --timeout=5m
@@ -43,9 +53,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "1.23"
           cache: true
           cache-dependency-path: services/api-gateway/go.sum
+      - name: copy migrations into embed path
+        run: |
+          mkdir -p services/api-gateway/internal/store/migrations
+          cp db/migrations/*.sql services/api-gateway/internal/store/migrations/
       - name: go test (race detector on)
         working-directory: services/api-gateway
         run: go test -race -count=1 ./...
@@ -75,11 +89,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          # No `cache: npm` — frontend/package-lock.json isn't committed
+          # (this is a single-user thesis prototype, version drift between
+          # CI runs is acceptable). Using `npm install` instead of `npm ci`
+          # so the lockfile-absent case is handled gracefully.
       - name: install
         working-directory: frontend
-        run: npm ci
+        run: npm install --no-audit --no-fund
       - name: typecheck
         working-directory: frontend
         # tsc is part of the vite build, but tsc --noEmit catches type errors
