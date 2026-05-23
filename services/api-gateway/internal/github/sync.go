@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -39,7 +40,34 @@ type RunInput struct {
 // Progress is the callback the syncer uses to report progress. Matches the
 // bgjobs.ProgressFn signature on purpose, so the binding in main.go is a
 // straight forward.
+//
+// We piggyback structured progress data on the `logsTail` channel as a
+// single-line JSON blob (see syncStats below). The frontend parses it
+// to render the live progress strip on the /datasets card: ETA, rate
+// limit countdown, jobs/sec, pages-of-N progress. Plain-text `message`
+// stays human-readable for /admin → Activity log.
 type Progress func(progress, total int, message, logsTail string)
+
+// syncStats is the wire format for structured sync progress. Lives in
+// bg_jobs.logs_tail as a one-line JSON document; the dataset card on
+// /datasets reads it through the regular /api/bg-jobs poll and renders
+// the bar / ETA / rate counter.
+type syncStats struct {
+	Phase         string  `json:"phase"`          // "fetching_meta" | "fetching_runs" | "rate_limited" | "done"
+	Page          int     `json:"page,omitempty"` // current page of runs being fetched
+	RunsSeen      int     `json:"runs_seen,omitempty"`
+	RunsTotal     int     `json:"runs_total,omitempty"`
+	JobsPerSec    float64 `json:"jobs_per_sec,omitempty"`
+	EtaSeconds    float64 `json:"eta_seconds,omitempty"`
+	RateRemaining int     `json:"rate_remaining,omitempty"`
+	RateLimit     int     `json:"rate_limit,omitempty"`
+	RateResetUnix int64   `json:"rate_reset_unix,omitempty"`
+}
+
+func (s syncStats) Encode() string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
 
 // Run performs a full sync for one repository.
 func (s *Syncer) Run(ctx context.Context, in RunInput, progress Progress) error {
@@ -60,7 +88,8 @@ func (s *Syncer) Run(ctx context.Context, in RunInput, progress Progress) error 
 		}
 	}()
 
-	progress(0, 1, fmt.Sprintf("fetching repo metadata: %s/%s", owner, name), "")
+	progress(0, 1, fmt.Sprintf("fetching repo metadata: %s/%s", owner, name),
+		syncStats{Phase: "fetching_meta"}.Encode())
 	meta, rate, err := s.Client.GetRepo(ctx, owner, name)
 	if err := s.handleRateLimit(ctx, err, rate, progress); err != nil {
 		return err
@@ -73,6 +102,7 @@ func (s *Syncer) Run(ctx context.Context, in RunInput, progress Progress) error 
 	// Phase 1: pages of runs (newest first).
 	totalCounted := 0
 	page := 1
+	startedAt := time.Now()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -174,7 +204,28 @@ func (s *Syncer) Run(ctx context.Context, in RunInput, progress Progress) error 
 
 			totalCounted++
 			if totalCounted%10 == 0 {
-				progress(totalCounted, runs.TotalCount, fmt.Sprintf("%s/%s: %d runs synced (rate %d/%d remaining)", owner, name, totalCounted, rl.Remaining, rl.Limit), "")
+				elapsed := time.Since(startedAt).Seconds()
+				rate := 0.0
+				if elapsed > 0 {
+					rate = float64(totalCounted) / elapsed
+				}
+				eta := 0.0
+				if rate > 0 && runs.TotalCount > totalCounted {
+					eta = float64(runs.TotalCount-totalCounted) / rate
+				}
+				stats := syncStats{
+					Phase:         "fetching_runs",
+					Page:          page,
+					RunsSeen:      totalCounted,
+					RunsTotal:     runs.TotalCount,
+					JobsPerSec:    rate,
+					EtaSeconds:    eta,
+					RateRemaining: rl.Remaining,
+					RateLimit:     rl.Limit,
+					RateResetUnix: rl.ResetAt.Unix(),
+				}
+				progress(totalCounted, runs.TotalCount, fmt.Sprintf("%s/%s: %d/%d runs (page %d, %d/%d rate)",
+					owner, name, totalCounted, runs.TotalCount, page, rl.Remaining, rl.Limit), stats.Encode())
 			}
 		}
 
@@ -188,7 +239,8 @@ func (s *Syncer) Run(ctx context.Context, in RunInput, progress Progress) error 
 		page++
 	}
 
-	progress(totalCounted, totalCounted, fmt.Sprintf("%s/%s: sync complete", owner, name), "")
+	progress(totalCounted, totalCounted, fmt.Sprintf("%s/%s: sync complete", owner, name),
+		syncStats{Phase: "done", RunsSeen: totalCounted, RunsTotal: totalCounted}.Encode())
 	return nil
 }
 
@@ -228,7 +280,12 @@ func (s *Syncer) handleRateLimit(ctx context.Context, err error, rl RateLimit, p
 		}
 		msg := fmt.Sprintf("rate limited — resuming at %s (~%.0f min)", apiErr.Rate.ResetAt.Format("15:04"), wait.Minutes())
 		log.Warn().Dur("wait", wait).Msg(msg)
-		progress(-1, -1, msg, "")
+		progress(-1, -1, msg, syncStats{
+			Phase:         "rate_limited",
+			RateRemaining: apiErr.Rate.Remaining,
+			RateLimit:     apiErr.Rate.Limit,
+			RateResetUnix: apiErr.Rate.ResetAt.Unix(),
+		}.Encode())
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

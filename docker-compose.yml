@@ -53,6 +53,12 @@ services:
     volumes:
       - model-artifacts:/var/lib/cicdml/models
       - thesis-output:/var/lib/cicdml/thesis
+      # Snapshot auto-restore: if ./db/seed/snapshot.sql.gz exists on the
+      # host, the api-gateway will gunzip and apply it on first boot,
+      # setting bootstrap_done=true. Lets a reviewer go from `git clone`
+      # to a working demo in ~2 minutes instead of waiting for the live
+      # GitHub fetch. Read-only — the orchestrator never writes here.
+      - ./db/seed:/var/lib/cicdml/seed:ro
 
   collector:
     build:

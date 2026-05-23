@@ -80,11 +80,17 @@ lint:
 	docker compose $(DEV_COMPOSE) exec frontend npm run lint
 
 snapshot:
-	docker compose $(DEV_COMPOSE) exec -T db pg_dump -U cicdml cicdml | gzip > db/seed/snapshot.sql.gz
+	@mkdir -p db/seed
+	# --inserts (vs default COPY) produces pure SQL INSERTs the api-gateway
+	# can replay through pgx at boot-time without needing psql in its
+	# container. Restore is ~5x slower than COPY but for our scale (≤50K
+	# rows) it's still under 30 seconds total. Worth the simpler restore
+	# path.
+	docker compose $(DEV_COMPOSE) exec -T db pg_dump --inserts --no-owner --no-acl -U cicdml cicdml | gzip > db/seed/snapshot.sql.gz
 	@echo "Snapshot saved to db/seed/snapshot.sql.gz"
 
 restore-snapshot:
-	gunzip -c db/seed/snapshot.sql.gz | docker compose $(DEV_COMPOSE) exec -T db psql -U cicdml -d cicdml
+	gunzip -c db/seed/snapshot.sql.gz | docker compose $(DEV_COMPOSE) exec -T db psql -v ON_ERROR_STOP=1 -U cicdml -d cicdml
 
 # Regenerate every figure for the dissertation. Wires the same exportThesisPack
 # the /experiments → "Export thesis pack" button calls, so the Makefile and UI

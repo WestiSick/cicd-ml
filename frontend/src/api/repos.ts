@@ -129,3 +129,50 @@ export type DatasetDetail = {
 export async function fetchDatasetDetail(id: number): Promise<DatasetDetail> {
   return api<DatasetDetail>(`/api/datasets/${id}`);
 }
+
+// /api/datasets/coverage — for the heatmap.
+export type CoverageResponse = {
+  days: string[];                                          // YYYY-MM-DD spine
+  repos: Array<{ id: number; slug: string }>;
+  cells: Array<{ repo_id: number; day: string; count: number }>;
+};
+
+export async function fetchDatasetsCoverage(days = 90): Promise<CoverageResponse> {
+  return api<CoverageResponse>(`/api/datasets/coverage?days=${days}`);
+}
+
+// /api/datasets/timeline — daily run counts for the wizard's cutoff bar.
+export type TimelineResponse = {
+  days: number;
+  cells: Array<{ day: string; count: number }>;
+};
+
+export async function fetchTimeline(opts: { days?: number; repoIDs?: number[] } = {}): Promise<TimelineResponse> {
+  const qs = new URLSearchParams();
+  if (opts.days) qs.set("days", String(opts.days));
+  if (opts.repoIDs && opts.repoIDs.length > 0) qs.set("repo_ids", opts.repoIDs.join(","));
+  const tail = qs.toString();
+  return api<TimelineResponse>(`/api/datasets/timeline${tail ? "?" + tail : ""}`);
+}
+
+// /api/datasets/{id}/features — for the feature-matrix preview panel.
+export type FeaturePreviewRow = {
+  job_id: number;
+  job_name: string;
+  duration_sec?: number;
+  head_branch?: string;
+  head_sha?: string;
+  created_at: string;
+  features: Record<string, number | string | null>;
+};
+
+export async function fetchFeaturePreview(
+  id: number,
+  opts: { limit?: number; jobName?: string } = {},
+): Promise<{ rows: FeaturePreviewRow[]; limit: number }> {
+  const qs = new URLSearchParams();
+  if (opts.limit) qs.set("limit", String(opts.limit));
+  if (opts.jobName) qs.set("job_name", opts.jobName);
+  const tail = qs.toString();
+  return api(`/api/datasets/${id}/features${tail ? "?" + tail : ""}`);
+}

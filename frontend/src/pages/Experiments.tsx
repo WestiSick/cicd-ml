@@ -11,6 +11,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { ApiError } from "@/api/client";
 import { activateModel, crossValidate, deleteModel, listModels, modelDownloadURL, startTraining, type CVResponse, type ModelRow } from "@/api/models";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { TrainWizard } from "@/components/TrainWizard";
 import { listBGJobs, type BGJob } from "@/api/bgjobs";
 import { exportThesisPack } from "@/api/thesisExport";
 import { useWebSocket } from "@/hooks/useWebSocket";
@@ -82,6 +83,7 @@ export function Experiments() {
   const [optunaTrials, setOptunaTrials] = useState(0); // 0 = off
   const [cvSplits, setCvSplits] = useState(5);
   const [cvResult, setCvResult] = useState<CVResponse | null>(null);
+  const [showWizard, setShowWizard] = useState(false);
 
   // Live WS push — refresh queries whenever bg_jobs broadcast a change.
   useWebSocket("/ws/bg-jobs", () => {
@@ -168,12 +170,17 @@ export function Experiments() {
             <Button variant="ghost" onClick={() => exportPack.mutate()} loading={exportPack.isPending}>
               {t("exp.export_pack")}
             </Button>
+            <Button variant="ghost" onClick={() => setShowWizard((v) => !v)}>
+              {t("exp.wizard_button")}
+            </Button>
             <Button variant="primary" onClick={() => train.mutate()} loading={train.isPending}>
               {t("exp.train", { algo })}
             </Button>
           </>
         }
       />
+
+      {showWizard && <TrainWizard onClose={() => setShowWizard(false)} />}
 
       <Card style={{ marginBottom: "var(--s-4)" }}>
         <div className="caps" style={{ color: "var(--text-tertiary)", marginBottom: "var(--s-2)" }}>

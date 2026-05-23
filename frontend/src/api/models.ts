@@ -17,6 +17,10 @@ export type StartTrainingRequest = {
   algo: string;
   params?: Record<string, unknown>;
   repo_ids?: number[];
+  /** ISO-8601 timestamp; rows older than this are excluded from the
+   *  training dataset (passed to ml-service as the `since` field on
+   *  load_jobs_df). Used by the wizard to enforce a time-based cutoff. */
+  since?: string;
   activate?: boolean;
   name?: string;
   /** When >= 2, ml-service runs an Optuna hyperparameter search of

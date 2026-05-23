@@ -29,6 +29,7 @@ func (s *Server) startTraining(w http.ResponseWriter, r *http.Request) {
 		Algo         string         `json:"algo"`
 		Params       map[string]any `json:"params"`
 		RepoIDs      []int64        `json:"repo_ids"`
+		Since        string         `json:"since"`
 		Activate     bool           `json:"activate"`
 		Name         string         `json:"name"`
 		OptunaTrials int            `json:"optuna_trials"`

@@ -156,7 +156,10 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/simulator/strategies", s.listStrategies)
 		r.Get("/queue", s.queueSnapshot)
 		r.Get("/datasets", s.datasetsSummary)
+		r.Get("/datasets/coverage", s.datasetsCoverage)
+		r.Get("/datasets/timeline", s.datasetsTimeline)
 		r.Get("/datasets/{id}", s.datasetDetail)
+		r.Get("/datasets/{id}/features", s.datasetFeaturePreview)
 	})
 
 	r.Post("/webhooks/github", s.handleGithubWebhook)

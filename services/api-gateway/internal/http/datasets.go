@@ -2,9 +2,11 @@ package http
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -244,6 +246,265 @@ func (s *Server) datasetConclusionCounts(ctx context.Context, repoID int64) map[
 		}
 	}
 	return out
+}
+
+// GET /api/datasets/timeline?repo_ids=1,2&days=180
+//
+// Returns daily run counts across the selected repos — used by the
+// /experiments wizard's "Train/test split" step to render a histogram
+// of available data so the user can pick a sensible time-based cutoff.
+//
+// One row per day; if repo_ids is omitted, aggregates across ALL repos.
+// Capped at 365 days.
+func (s *Server) datasetsTimeline(w http.ResponseWriter, r *http.Request) {
+	days := 180
+	if q := r.URL.Query().Get("days"); q != "" {
+		if n, err := strconv.Atoi(q); err == nil && n > 0 && n <= 365 {
+			days = n
+		}
+	}
+	var repoIDs []int64
+	if q := r.URL.Query().Get("repo_ids"); q != "" {
+		for _, s := range splitNonEmpty(q, ',') {
+			if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+				repoIDs = append(repoIDs, n)
+			}
+		}
+	}
+
+	from := time.Now().UTC().AddDate(0, 0, -days)
+	var (
+		rows interface {
+			Next() bool
+			Scan(...any) error
+			Close()
+			Err() error
+		}
+		err error
+	)
+	if len(repoIDs) == 0 {
+		rows, err = s.db.Pool.Query(r.Context(), `
+			SELECT date_trunc('day', w.created_at)::date AS day, COUNT(j.id) AS jobs
+			FROM jobs j
+			JOIN workflow_runs w ON j.run_id = w.id
+			WHERE w.created_at >= $1
+			GROUP BY day
+			ORDER BY day ASC
+		`, from)
+	} else {
+		rows, err = s.db.Pool.Query(r.Context(), `
+			SELECT date_trunc('day', w.created_at)::date AS day, COUNT(j.id) AS jobs
+			FROM jobs j
+			JOIN workflow_runs w ON j.run_id = w.id
+			WHERE w.created_at >= $1
+			  AND w.repo_id = ANY($2)
+			GROUP BY day
+			ORDER BY day ASC
+		`, from, repoIDs)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "timeline_failed",
+			"Could not load timeline", "")
+		return
+	}
+	defer rows.Close()
+	type cell struct {
+		Day   string `json:"day"`
+		Count int64  `json:"count"`
+	}
+	out := []cell{}
+	for rows.Next() {
+		var c cell
+		var day time.Time
+		if err := rows.Scan(&day, &c.Count); err == nil {
+			c.Day = day.Format("2006-01-02")
+			out = append(out, c)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"days":  days,
+		"cells": out,
+	})
+}
+
+func splitNonEmpty(s string, sep byte) []string {
+	out := []string{}
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == sep {
+			if i > start {
+				out = append(out, s[start:i])
+			}
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		out = append(out, s[start:])
+	}
+	return out
+}
+
+// GET /api/datasets/coverage?days=90
+//
+// Per-repo daily run-count matrix for the heatmap on /datasets. Returns
+// one cell per (repo, day-bucket) — sparse representation rather than a
+// dense 2D grid because most repos have many empty days.
+//
+// Shape:
+//
+//	{
+//	  "days":  ["2025-03-01", "2025-03-02", ...],
+//	  "repos": [{"id": 1, "slug": "vitejs/vite"}, ...],
+//	  "cells": [{"repo_id": 1, "day": "2025-03-15", "count": 42}, ...]
+//	}
+//
+// The frontend pivots into a 2D grid for the HeatmapChart component.
+// Days default to 90; capped at 365 to keep the response slim.
+func (s *Server) datasetsCoverage(w http.ResponseWriter, r *http.Request) {
+	days := 90
+	if q := r.URL.Query().Get("days"); q != "" {
+		if n, err := strconv.Atoi(q); err == nil && n > 0 && n <= 365 {
+			days = n
+		}
+	}
+
+	// Build the day spine first so the frontend can render empty cells
+	// without guessing the window.
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	dayStrings := make([]string, days)
+	for i := 0; i < days; i++ {
+		dayStrings[i] = today.AddDate(0, 0, -(days - 1 - i)).Format("2006-01-02")
+	}
+
+	// Repos for the legend — same order as /api/repos so the user's eye
+	// doesn't have to re-orient.
+	type repoLite struct {
+		ID   int64  `json:"id"`
+		Slug string `json:"slug"`
+	}
+	repos, err := s.db.ListRepos(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "coverage_repos_failed",
+			"Could not load repositories for heatmap", "")
+		return
+	}
+	repoOut := make([]repoLite, 0, len(repos))
+	for _, rp := range repos {
+		repoOut = append(repoOut, repoLite{ID: rp.ID, Slug: rp.Owner + "/" + rp.Name})
+	}
+
+	// One SQL query for the whole grid, bucketed to UTC day.
+	rows, err := s.db.Pool.Query(r.Context(), `
+		SELECT w.repo_id,
+		       date_trunc('day', w.created_at)::date AS day,
+		       COUNT(j.id) AS jobs
+		FROM jobs j
+		JOIN workflow_runs w ON j.run_id = w.id
+		WHERE w.created_at >= $1
+		GROUP BY w.repo_id, date_trunc('day', w.created_at)
+	`, today.AddDate(0, 0, -days))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "coverage_query_failed",
+			"Could not aggregate coverage", "")
+		return
+	}
+	defer rows.Close()
+	type cell struct {
+		RepoID int64  `json:"repo_id"`
+		Day    string `json:"day"`
+		Count  int64  `json:"count"`
+	}
+	cells := []cell{}
+	for rows.Next() {
+		var c cell
+		var day time.Time
+		if err := rows.Scan(&c.RepoID, &day, &c.Count); err == nil {
+			c.Day = day.Format("2006-01-02")
+			cells = append(cells, c)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"days":  dayStrings,
+		"repos": repoOut,
+		"cells": cells,
+	})
+}
+
+// GET /api/datasets/{id}/features?limit=50
+//
+// Returns the first N rows of materialised features for a repo, with
+// the feature_vector JSONB unpacked into a flat numeric record. Used by
+// /datasets/:id "Feature matrix preview" panel.
+//
+// Limit capped at 200 — beyond that the UI table is unreadable and the
+// JSON response gets heavy.
+func (s *Server) datasetFeaturePreview(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id",
+			"Dataset id must be numeric", "")
+		return
+	}
+	limit := 50
+	if q := r.URL.Query().Get("limit"); q != "" {
+		if n, err := strconv.Atoi(q); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	jobNameFilter := r.URL.Query().Get("job_name")
+
+	args := []any{id, limit}
+	jobFilterSQL := ""
+	if jobNameFilter != "" {
+		jobFilterSQL = " AND j.name = $3"
+		args = []any{id, limit, jobNameFilter}
+	}
+
+	rows, err := s.db.Pool.Query(r.Context(), `
+		SELECT j.id, j.name, j.duration_sec,
+		       w.head_branch, w.head_sha, w.created_at,
+		       f.feature_vector
+		FROM jobs j
+		JOIN workflow_runs w ON j.run_id = w.id
+		LEFT JOIN features f ON f.job_id = j.id
+		WHERE w.repo_id = $1`+jobFilterSQL+`
+		ORDER BY w.created_at DESC
+		LIMIT $2
+	`, args...)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "feature_preview_failed",
+			"Could not load feature preview", "")
+		return
+	}
+	defer rows.Close()
+
+	type previewRow struct {
+		JobID       int64          `json:"job_id"`
+		JobName     string         `json:"job_name"`
+		DurationSec *int           `json:"duration_sec,omitempty"`
+		HeadBranch  *string        `json:"head_branch,omitempty"`
+		HeadSHA     *string        `json:"head_sha,omitempty"`
+		CreatedAt   time.Time      `json:"created_at"`
+		Features    map[string]any `json:"features"`
+	}
+	out := []previewRow{}
+	for rows.Next() {
+		var pr previewRow
+		var raw []byte
+		if err := rows.Scan(&pr.JobID, &pr.JobName, &pr.DurationSec,
+			&pr.HeadBranch, &pr.HeadSHA, &pr.CreatedAt, &raw); err == nil {
+			pr.Features = map[string]any{}
+			if len(raw) > 0 {
+				_ = json.Unmarshal(raw, &pr.Features)
+			}
+			out = append(out, pr)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"rows":  out,
+		"limit": limit,
+	})
 }
 
 // GET /api/queue

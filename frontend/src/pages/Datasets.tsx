@@ -10,10 +10,13 @@ import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { WebhookBadge } from "@/components/WebhookBadge";
+import { SyncProgressStrip } from "@/components/SyncProgressStrip";
+import { useRepoSyncProgress } from "@/hooks/useRepoSyncProgress";
 import { ApiError } from "@/api/client";
 import {
   addRepo,
   deleteRepo,
+  fetchDatasetsCoverage,
   listRepos,
   pauseRepo,
   resumeRepo,
@@ -21,6 +24,7 @@ import {
   syncRepo,
   type Repo,
 } from "@/api/repos";
+import { HeatmapChart } from "@/components/HeatmapChart";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useT } from "@/i18n";
 import { formatRelativeTime } from "@/lib/format";
@@ -36,8 +40,24 @@ export function Datasets() {
     refetchInterval: 5_000,
   });
 
+  // Per-repo live sync stats (page/ETA/rate counter). The hook owns the
+  // /ws/bg-jobs subscription and the REST seed; cards just look up
+  // their slug.
+  const syncByRepo = useRepoSyncProgress();
+
+  // Coverage heatmap data — slow-moving (denormalised counts), poll
+  // every 30s. Rerenders when bg-jobs invalidate happens via the
+  // useEffect cascade.
+  const coverageQ = useQuery({
+    queryKey: ["datasets-coverage"],
+    queryFn: () => fetchDatasetsCoverage(90),
+    refetchInterval: 30_000,
+  });
+
   // Any bg-jobs update can affect repo counters (collect_history bumps
-  // them on every page). Cheap to refresh on ws push.
+  // them on every page). Cheap to refresh on ws push. The useRepoSyncProgress
+  // hook also invalidates ["repos"]; this is a belt-and-braces safety net
+  // for events on other kinds (compute_features, train_model).
   useWebSocket("/ws/bg-jobs", () => {
     qc.invalidateQueries({ queryKey: ["repos"] });
   });
@@ -88,12 +108,28 @@ export function Datasets() {
         />
       )}
 
+      {coverageQ.data && coverageQ.data.repos.length > 0 && (
+        <Card style={{ marginBottom: "var(--s-3)", overflowX: "auto" }}>
+          <div
+            className="caps"
+            style={{ color: "var(--text-tertiary)", marginBottom: "var(--s-2)", fontSize: 11 }}
+          >
+            {t("datasets.coverage.title")}
+          </div>
+          <HeatmapChart data={coverageQ.data} />
+          <div style={{ color: "var(--text-tertiary)", fontSize: "var(--fs-12)", marginTop: "var(--s-2)" }}>
+            {t("datasets.coverage.hint")}
+          </div>
+        </Card>
+      )}
+
       {q.data && q.data.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s-3)" }}>
           {q.data.map((r) => (
             <RepoCard
               key={r.id}
               repo={r}
+              syncStats={syncByRepo[`${r.owner}/${r.name}`]}
               onSynced={() => qc.invalidateQueries({ queryKey: ["repos"] })}
             />
           ))}
@@ -103,7 +139,15 @@ export function Datasets() {
   );
 }
 
-function RepoCard({ repo, onSynced }: { repo: Repo; onSynced: () => void }) {
+function RepoCard({
+  repo,
+  syncStats,
+  onSynced,
+}: {
+  repo: Repo;
+  syncStats: import("@/hooks/useRepoSyncProgress").RepoSyncStats | undefined;
+  onSynced: () => void;
+}) {
   const t = useT();
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -235,6 +279,8 @@ function RepoCard({ repo, onSynced }: { repo: Repo; onSynced: () => void }) {
           errorMessage={repo.webhook_error}
         />
       </div>
+
+      <SyncProgressStrip stats={syncStats} />
 
       {repo.last_error && (
         <div

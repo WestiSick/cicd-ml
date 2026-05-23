@@ -10,6 +10,8 @@ import { useWebSocket } from "@/hooks/useWebSocket";
 import { useT } from "@/i18n";
 import { fetchSystemState } from "@/api/system";
 import { formatDuration, formatSignedPercent } from "@/lib/format";
+import { QueueCard } from "@/components/QueueCard";
+import { useDashboardQueue } from "@/hooks/useDashboardQueue";
 
 type QueueEvent = {
   type: string;
@@ -48,6 +50,21 @@ export function Dashboard() {
     queryFn: fetchSystemState,
     refetchInterval: 5_000,
   });
+
+  // Active-job cards, keyed by run_id. Combines REST seed with WS
+  // updates — see useDashboardQueue for the merging logic.
+  const activeCards = useDashboardQueue();
+
+  // KPI: mean wait — average of (started_at - run created) for the most
+  // recent N completed runs. We derive from activeCards (which carries
+  // both predicted and actual); a more rigorous version would query the
+  // /api/queue endpoint with a wider lookback.
+  const meanWait = (() => {
+    const completed = activeCards.filter((c) => c.actual_sec !== undefined);
+    if (completed.length === 0) return undefined;
+    const sum = completed.reduce((acc, c) => acc + (c.actual_sec ?? 0), 0);
+    return sum / completed.length;
+  })();
 
   const { connected } = useWebSocket("/ws/queue", (msg) => {
     if (!msg.type.startsWith("workflow_run.")) return;
@@ -105,8 +122,31 @@ export function Dashboard() {
           value={connected ? t("common.online") : t("common.offline")}
           hint={connected ? t("dashboard.kpi.ws_connected") : t("dashboard.kpi.reconnecting")}
         />
-        <Kpi label={t("dashboard.kpi.recent_events")} value={String(events.length)} />
+        <Kpi
+          label={t("dashboard.kpi.mean_wait")}
+          value={meanWait !== undefined ? formatDuration(meanWait) : "—"}
+          hint={meanWait !== undefined ? t("dashboard.kpi.mean_wait.hint", { n: activeCards.filter(c => c.actual_sec !== undefined).length }) : t("dashboard.kpi.mean_wait.empty")}
+        />
       </section>
+
+      <h2 style={sectionTitleStyle}>
+        {t("dashboard.queue")}
+        <span style={{ marginLeft: 8, color: "var(--text-tertiary)", fontSize: "var(--fs-12)", fontWeight: 400 }}>
+          {activeCards.length > 0 ? `(${activeCards.length})` : ""}
+        </span>
+      </h2>
+      {activeCards.length === 0 ? (
+        <EmptyState
+          title={t("dashboard.queue.empty.title")}
+          hint={t("dashboard.queue.empty.hint")}
+        />
+      ) : (
+        <div style={{ display: "grid", gap: "var(--s-2)", marginBottom: "var(--s-6)" }}>
+          {activeCards.map((c, i) => (
+            <QueueCard key={c.run_id ?? c.job_id ?? i} data={c} fresh={i < 1 && c.status === "in_progress"} />
+          ))}
+        </div>
+      )}
 
       <h2 style={sectionTitleStyle}>{t("dashboard.live_feed")}</h2>
       {events.length === 0 ? (

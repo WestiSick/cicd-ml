@@ -55,6 +55,24 @@ func main() {
 		log.Fatal().Err(err).Msg("migrate")
 	}
 
+	// Best-effort snapshot auto-restore — see store/snapshot.go for the
+	// full rationale. In short: if `/var/lib/cicdml/seed/snapshot.sql.gz`
+	// exists AND bootstrap_done is false, we apply the pre-baked dump and
+	// flip bootstrap_done. This turns the reviewer's first-run experience
+	// from "wait an hour for GitHub fetch" into "1–2 minutes total".
+	//
+	// Failure here is NOT fatal: we log and continue. Worst case the user
+	// goes through the normal /setup flow.
+	snapshotPath := getenv("SNAPSHOT_PATH", "/var/lib/cicdml/seed/snapshot.sql.gz")
+	if res, err := db.RestoreSnapshotIfPresent(ctx, snapshotPath); err != nil {
+		log.Warn().Err(err).Str("path", snapshotPath).Msg("snapshot auto-restore failed; falling back to /setup")
+	} else if !res.Skipped {
+		log.Info().
+			Int("statements", res.StatementsRun).
+			Dur("elapsed", res.Elapsed).
+			Msg("auto-restored snapshot — system is ready without /setup")
+	}
+
 	hub := ws.NewHub()
 
 	// Background job runner. Handlers register their kind → function map.
@@ -107,6 +125,16 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(shutdownCtx)
+}
+
+// getenv is the inline equivalent of config.getenv — kept here so the
+// snapshot path override doesn't need a round-trip through the config
+// struct (only one caller, and this main file already pulls os anyway).
+func getenv(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }
 
 // wrap adapts a func with raw `func(int, int, string, string)` progress

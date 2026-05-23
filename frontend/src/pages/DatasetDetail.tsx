@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
@@ -6,7 +7,7 @@ import { Card } from "@/components/Card";
 import { EmptyState } from "@/components/EmptyState";
 import { BarChart } from "@/components/BarChart";
 import { StatusChip } from "@/components/StatusChip";
-import { fetchDatasetDetail } from "@/api/repos";
+import { fetchDatasetDetail, fetchFeaturePreview } from "@/api/repos";
 import { useT } from "@/i18n";
 import { formatDuration } from "@/lib/format";
 
@@ -162,7 +163,98 @@ export function DatasetDetail() {
           />
         </Card>
       </div>
+
+      <div style={{ marginTop: "var(--s-3)" }}>
+        <FeaturePreview repoID={repoID} />
+      </div>
     </>
+  );
+}
+
+/* FeaturePreview — first N rows of materialised features for this repo.
+ * Job-name filter narrows to one workflow's matrix, useful when the
+ * user wants to inspect what the model sees per pipeline. */
+function FeaturePreview({ repoID }: { repoID: number }) {
+  const t = useT();
+  const [jobName, setJobName] = useState<string>("");
+  const q = useQuery({
+    queryKey: ["features-preview", repoID, jobName],
+    queryFn: () => fetchFeaturePreview(repoID, { limit: 50, jobName: jobName || undefined }),
+  });
+
+  // Collect the union of feature names from all rows so columns are
+  // stable. Limit to the most common 12 columns to keep horizontal
+  // scroll manageable.
+  const cols: string[] = (() => {
+    if (!q.data) return [];
+    const counts = new Map<string, number>();
+    for (const r of q.data.rows) {
+      for (const k of Object.keys(r.features || {})) counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 12)
+      .map(([k]) => k);
+  })();
+
+  return (
+    <Card>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--s-2)" }}>
+        <SectionTitle>{t("datasets.detail.feature_preview")}</SectionTitle>
+        <input
+          value={jobName}
+          onChange={(e) => setJobName(e.target.value)}
+          placeholder={t("datasets.detail.feature_preview.filter")}
+          spellCheck={false}
+          style={{
+            height: 28, padding: "0 var(--s-2)",
+            background: "var(--bg-base)",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: "var(--r-6)",
+            color: "var(--text-primary)",
+            fontFamily: "var(--font-mono)",
+            fontSize: "var(--fs-12)",
+            outline: "none",
+            width: 240,
+          }}
+        />
+      </div>
+      {q.isLoading && <p style={{ color: "var(--text-secondary)", fontSize: "var(--fs-13)" }}>{t("common.loading")}</p>}
+      {q.data && q.data.rows.length === 0 && (
+        <p style={{ color: "var(--text-tertiary)", fontSize: "var(--fs-13)", margin: 0 }}>
+          {t("datasets.detail.feature_preview.empty")}
+        </p>
+      )}
+      {q.data && q.data.rows.length > 0 && (
+        <div style={{ overflowX: "auto" }}>
+          <table style={tableStyle}>
+            <thead>
+              <tr>
+                <Th>job_name</Th>
+                <Th right>duration</Th>
+                {cols.map((c) => <Th key={c} right>{c.length > 18 ? c.slice(0, 16) + "…" : c}</Th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {q.data.rows.map((r) => (
+                <tr key={r.job_id}>
+                  <Td mono>{r.job_name.length > 36 ? r.job_name.slice(0, 34) + "…" : r.job_name}</Td>
+                  <Td right mono>{r.duration_sec !== undefined ? formatDuration(r.duration_sec) : "—"}</Td>
+                  {cols.map((c) => {
+                    const v = r.features?.[c];
+                    return (
+                      <Td key={c} right mono>
+                        {typeof v === "number" ? v.toFixed(2) : v == null ? "—" : String(v)}
+                      </Td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
   );
 }
 
