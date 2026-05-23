@@ -185,6 +185,14 @@ type PredictFromPayloadRequest struct {
 	JobName      *string `json:"job_name,omitempty"`
 	RunnerName   *string `json:"runner_name,omitempty"`
 	StepsCount   *int    `json:"steps_count,omitempty"`
+
+	// HeadSHA is the commit SHA from the workflow_run payload. When
+	// supplied, ml-service joins commits + commit_files and feeds the
+	// per-bucket file counts into the model — that's what lets the
+	// webhook prediction know "this push is backend-heavy" vs "docs-
+	// only". Optional: if empty, prediction falls back to repo/branch
+	// averages only.
+	HeadSHA *string `json:"head_sha,omitempty"`
 }
 
 type PredictFromPayloadResponse struct {

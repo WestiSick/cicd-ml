@@ -42,7 +42,16 @@ class PredictFromPayloadBody(BaseModel):
 
     Fields mirror what the workflow_run payload carries; missing values
     are routed to the schema's __missing__ bucket so prediction still
-    works without a full feature row."""
+    works without a full feature row.
+
+    head_sha unlocks the commit-content features (backend/frontend/test
+    file counts, is_docs_only). When supplied AND the matching commit
+    is already in `commits` + `commit_files` (api-gateway populates this
+    synchronously in `ensureCommitForWebhook` before calling us), the
+    bucket columns flow into the model. Without it, those features fall
+    back to zeros and the prediction degrades to repo/branch averages —
+    that's the same behaviour as ml-service v2 had before this fix.
+    """
     repo_owner: str
     repo_name: str
     workflow_name: str | None = None
@@ -51,6 +60,7 @@ class PredictFromPayloadBody(BaseModel):
     job_name: str | None = None
     runner_name: str | None = None
     steps_count: int | None = None
+    head_sha: str | None = None
 
 
 @router.post("/")
@@ -136,12 +146,23 @@ async def predict_from_payload(body: PredictFromPayloadBody) -> dict[str, Any]:
         "repo_name":      body.repo_name,
         "workflow_name":  body.workflow_name,
         "head_branch":    body.head_branch,
+        "head_sha":       body.head_sha,
         "event":          body.event,
         "job_name":       body.job_name,
         "runner_name":    body.runner_name,
         "steps_count":    body.steps_count if body.steps_count is not None else 0,
         "run_created_at": now,
     }])
+
+    # Attach commit-content features when we have a SHA AND it's already
+    # been persisted. api-gateway's webhook handler does a synchronous
+    # GetCommit + UpsertCommit + BulkInsertCommitFiles before calling us
+    # so the typical happy path finds rows; if it didn't (rate-limited,
+    # no PAT), attach_commit_file_features fills zeros and the prediction
+    # silently falls back to repo/branch averages.
+    if body.head_sha:
+        df = db.attach_commit_file_features(df, s.postgres_dsn)
+
     X, _, _ = transform(df, schema)
     pred_log = model.estimator.predict(X)
     predicted_sec = float(np.clip(np.expm1(pred_log[0]), 0.0, None))
