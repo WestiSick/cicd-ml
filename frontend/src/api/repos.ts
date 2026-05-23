@@ -1,5 +1,12 @@
 import { api } from "./client";
 
+export type WebhookStatus =
+  | "not_attempted"
+  | "installed"
+  | "failed_no_access"
+  | "failed_unreachable"
+  | "failed_other";
+
 export type Repo = {
   id: number;
   owner: string;
@@ -16,7 +23,31 @@ export type Repo = {
   last_error?: string;
   is_seed: boolean;
   added_at: string;
+
+  // Webhook auto-install tracking — populated by the api-gateway after a
+  // best-effort POST /repos/{owner}/{repo}/hooks call on GitHub. UI shows
+  // a status badge on the repo card with this.
+  webhook_id?: number;
+  webhook_url?: string;
+  webhook_installed_at?: string;
+  webhook_status: WebhookStatus;
+  webhook_error?: string;
 };
+
+export type InstallWebhookResponse = {
+  status: WebhookStatus;
+  hook_id?: number;
+  callback?: string;
+  error?: string;
+};
+
+export async function installRepoWebhook(id: number): Promise<InstallWebhookResponse> {
+  return api<InstallWebhookResponse>(`/api/repos/${id}/webhook`, { method: "POST" });
+}
+
+export async function removeRepoWebhook(id: number): Promise<{ removed: boolean; warning?: string }> {
+  return api(`/api/repos/${id}/webhook`, { method: "DELETE" });
+}
 
 export async function listRepos(): Promise<Repo[]> {
   const r = await api<{ repos: Repo[] }>("/api/repos");

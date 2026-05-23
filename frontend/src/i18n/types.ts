@@ -122,6 +122,17 @@ export type TranslationKey =
   | "datasets.detail.branches"
   | "datasets.detail.conclusions"
   | "datasets.detail.back"
+  | "datasets.webhook.installed"
+  | "datasets.webhook.not_attempted"
+  | "datasets.webhook.failed_no_access"
+  | "datasets.webhook.failed_unreachable"
+  | "datasets.webhook.failed_other"
+  | "datasets.webhook.install"
+  | "datasets.webhook.remove"
+  | "datasets.webhook.tooltip_installed"
+  | "datasets.webhook.toast.installed"
+  | "datasets.webhook.toast.removed"
+  | "datasets.webhook.toast.failed"
 
   // experiments
   | "exp.title"

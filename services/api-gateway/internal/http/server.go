@@ -23,6 +23,7 @@ package http
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -31,27 +32,37 @@ import (
 
 	"github.com/buzdin/cicd-ml/api-gateway/internal/bootstrap"
 	"github.com/buzdin/cicd-ml/api-gateway/internal/config"
+	gh "github.com/buzdin/cicd-ml/api-gateway/internal/github"
 	"github.com/buzdin/cicd-ml/api-gateway/internal/ml"
 	"github.com/buzdin/cicd-ml/api-gateway/internal/store"
 	"github.com/buzdin/cicd-ml/api-gateway/internal/ws"
 )
 
 type Server struct {
-	cfg      config.Config
-	db       *store.DB
-	hub      *ws.Hub
-	mlClient *ml.Client
-	orches   *bootstrap.Orchestrator
-	r        chi.Router
+	cfg       config.Config
+	db        *store.DB
+	hub       *ws.Hub
+	mlClient  *ml.Client
+	orches    *bootstrap.Orchestrator
+	installer *gh.Installer // GitHub webhook installer — shared across handlers
+	r         chi.Router
 }
 
 func NewServer(cfg config.Config, db *store.DB, hub *ws.Hub, mlClient *ml.Client) *Server {
+	// Compute the callback URL once at startup so all handlers use the
+	// same string. If PUBLIC_API_BASE is misconfigured, IsReachable
+	// downstream will skip the call rather than asking GitHub to POST
+	// to localhost.
+	callbackURL := strings.TrimRight(cfg.PublicAPIBase, "/") + "/webhooks/github"
+
+	installer := gh.NewInstaller(callbackURL, cfg.GithubWebhookSecret)
 	s := &Server{
-		cfg:      cfg,
-		db:       db,
-		hub:      hub,
-		mlClient: mlClient,
-		orches:   bootstrap.NewOrchestrator(db),
+		cfg:       cfg,
+		db:        db,
+		hub:       hub,
+		mlClient:  mlClient,
+		orches:    bootstrap.NewOrchestrator(db).WithInstaller(installerAdapter{inner: installer}),
+		installer: installer,
 	}
 	s.r = s.buildRouter()
 	return s
@@ -93,6 +104,8 @@ func (s *Server) buildRouter() chi.Router {
 		r.Post("/repos/{id}/pause", s.pauseRepo)
 		r.Post("/repos/{id}/resume", s.resumeRepo)
 		r.Post("/repos/{id}/resync", s.resyncRepo)
+		r.Post("/repos/{id}/webhook", s.installRepoWebhook)
+		r.Delete("/repos/{id}/webhook", s.removeRepoWebhook)
 		r.Delete("/repos/{id}", s.deleteRepo)
 
 		// Setup / bootstrap.

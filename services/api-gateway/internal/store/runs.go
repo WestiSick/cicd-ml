@@ -33,17 +33,17 @@ func (d *DB) UpsertWorkflowRun(ctx context.Context, repoID int64, in UpsertWorkf
 }
 
 type UpsertWorkflowRunParams struct {
-	RunID         int64
-	WorkflowName  string
-	HeadBranch    string
-	HeadSHA       string
-	Event         string
-	Status        string
-	Conclusion    string
-	Actor         string
-	CreatedAt     time.Time
-	RunStartedAt  *time.Time
-	UpdatedAt     time.Time
+	RunID        int64
+	WorkflowName string
+	HeadBranch   string
+	HeadSHA      string
+	Event        string
+	Status       string
+	Conclusion   string
+	Actor        string
+	CreatedAt    time.Time
+	RunStartedAt *time.Time
+	UpdatedAt    time.Time
 }
 
 // UpsertJob keyed by (run_id, name, github_job_id). Returns the local id.
@@ -118,7 +118,9 @@ func (d *DB) LookupRepo(ctx context.Context, owner, name string) (Repo, error) {
 	row := d.Pool.QueryRow(ctx, `
 		SELECT id, owner, name, github_id, default_branch, tracked_branches,
 		       status, last_synced_at, oldest_run_at, newest_run_at,
-		       runs_count, jobs_count, last_error, is_seed, added_at
+		       runs_count, jobs_count, last_error, is_seed, added_at,
+		       webhook_id, webhook_url, webhook_installed_at,
+		       webhook_status, webhook_error
 		FROM repos WHERE owner = $1 AND name = $2
 	`, owner, name)
 	return scanRepo(row)
@@ -130,7 +132,9 @@ func (d *DB) LookupRepoByID(ctx context.Context, id int64) (Repo, error) {
 	row := d.Pool.QueryRow(ctx, `
 		SELECT id, owner, name, github_id, default_branch, tracked_branches,
 		       status, last_synced_at, oldest_run_at, newest_run_at,
-		       runs_count, jobs_count, last_error, is_seed, added_at
+		       runs_count, jobs_count, last_error, is_seed, added_at,
+		       webhook_id, webhook_url, webhook_installed_at,
+		       webhook_status, webhook_error
 		FROM repos WHERE id = $1
 	`, id)
 	return scanRepo(row)

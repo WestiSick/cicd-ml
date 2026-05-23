@@ -9,6 +9,7 @@ import { StatusChip } from "@/components/StatusChip";
 import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { WebhookBadge } from "@/components/WebhookBadge";
 import { ApiError } from "@/api/client";
 import {
   addRepo,
@@ -225,6 +226,15 @@ function RepoCard({ repo, onSynced }: { repo: Repo; onSynced: () => void }) {
           {repo.tracked_branches.length > 4 && ` · +${repo.tracked_branches.length - 4}`}
         </div>
       )}
+
+      <div style={{ marginTop: "var(--s-3)" }}>
+        <WebhookBadge
+          repoID={repo.id}
+          status={repo.webhook_status}
+          webhookURL={repo.webhook_url}
+          errorMessage={repo.webhook_error}
+        />
+      </div>
 
       {repo.last_error && (
         <div

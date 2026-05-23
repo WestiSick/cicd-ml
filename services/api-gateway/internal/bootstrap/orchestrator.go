@@ -57,11 +57,29 @@ func (r SetupRequest) Validate() error {
 	return nil
 }
 
+// WebhookInstaller is the subset of github.Installer the orchestrator
+// needs — interface-typed so tests can pass a stub without bringing in
+// the full HTTP client. Real implementation in services/api-gateway/
+// internal/github/installer.go.
+type WebhookInstaller interface {
+	Install(ctx context.Context, token, owner, repo string) (status string, hookID int64, callbackURL, errMsg string)
+}
+
 type Orchestrator struct {
-	db *store.DB
+	db        *store.DB
+	installer WebhookInstaller // optional; nil means "skip webhook auto-install during /setup"
 }
 
 func NewOrchestrator(db *store.DB) *Orchestrator { return &Orchestrator{db: db} }
+
+// WithInstaller wires a webhook installer so /setup also auto-installs
+// webhooks on every seed repo (the same way POST /api/repos does for
+// user-added ones). Optional — without it the orchestrator just records
+// the repos and the user can install webhooks manually later.
+func (o *Orchestrator) WithInstaller(w WebhookInstaller) *Orchestrator {
+	o.installer = w
+	return o
+}
 
 // Start registers the repos and enqueues the bootstrap bg_job that will
 // chain the rest of the pipeline. Returns the bootstrap job id so the
@@ -83,19 +101,28 @@ func (o *Orchestrator) Start(ctx context.Context, req SetupRequest) (int64, erro
 	}
 
 	// Register the repos. Existing ones are a no-op (UNIQUE conflict).
+	// For each one we also kick off a webhook install in the background:
+	// the user's own repos get a working webhook auto-magically; upstream
+	// OSS repos (vitejs/vite etc.) record `failed_no_access` and the UI
+	// shows a yellow badge explaining why.
 	for _, slug := range req.Repos {
 		owner, name, err := store.ParseGithubURL(slug)
 		if err != nil {
 			return 0, fmt.Errorf("repo %q: %w", slug, err)
 		}
-		if _, err := o.db.AddRepo(ctx, store.AddRepoParams{
+		repo, err := o.db.AddRepo(ctx, store.AddRepoParams{
 			Owner:  owner,
 			Name:   name,
 			IsSeed: true,
-		}); err != nil {
+		})
+		if err != nil {
 			return 0, fmt.Errorf("add repo %s/%s: %w", owner, name, err)
 		}
 		_ = o.db.RecordActivity(ctx, "setup", "add_repo", owner+"/"+name, "added during setup", true, nil)
+
+		if o.installer != nil {
+			go o.installWebhookForRepo(repo.ID, owner, name, req.GithubToken)
+		}
 	}
 
 	// Enqueue the bootstrap chain — the Handler below picks it up and
@@ -106,6 +133,26 @@ func (o *Orchestrator) Start(ctx context.Context, req SetupRequest) (int64, erro
 	}
 	log.Info().Int64("id", job.ID).Int("repos", len(req.Repos)).Int("models", len(req.Models)).Msg("setup queued")
 	return job.ID, nil
+}
+
+// installWebhookForRepo is a fire-and-forget helper used during /setup.
+// Detached context with a hard timeout so we don't hold goroutines if the
+// process is shutting down. The result lands in `repos.webhook_*`
+// columns and the UI shows the badge on next refresh.
+func (o *Orchestrator) installWebhookForRepo(repoID int64, owner, name, token string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if token == "" {
+		// Fall back to persisted PAT if the user didn't supply one during /setup.
+		if persisted, err := o.db.GetGithubPAT(ctx); err == nil {
+			token = persisted
+		}
+	}
+	status, hookID, callbackURL, errMsg := o.installer.Install(ctx, token, owner, name)
+	_ = o.db.SetRepoWebhook(ctx, repoID, hookID, callbackURL, status, errMsg)
+	_ = o.db.RecordActivity(ctx, "setup", "install_webhook", owner+"/"+name,
+		errMsg, status == "installed",
+		map[string]any{"status": status, "hook_id": hookID, "callback": callbackURL})
 }
 
 // Handler returns the bgjobs.Handler bound to this orchestrator.

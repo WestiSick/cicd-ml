@@ -126,6 +126,17 @@ export const ru: Record<TranslationKey, string> = {
   "datasets.detail.branches": "Ветки",
   "datasets.detail.conclusions": "Результаты",
   "datasets.detail.back": "К датасетам",
+  "datasets.webhook.installed": "Webhook активен",
+  "datasets.webhook.not_attempted": "Webhook не установлен",
+  "datasets.webhook.failed_no_access": "Webhook: нет admin-доступа",
+  "datasets.webhook.failed_unreachable": "Webhook: публичный URL не задан",
+  "datasets.webhook.failed_other": "Webhook: ошибка установки",
+  "datasets.webhook.install": "Установить webhook",
+  "datasets.webhook.remove": "Удалить webhook",
+  "datasets.webhook.tooltip_installed": "GitHub будет слать workflow_run события на {url}",
+  "datasets.webhook.toast.installed": "Webhook установлен",
+  "datasets.webhook.toast.removed": "Webhook удалён",
+  "datasets.webhook.toast.failed": "Не удалось установить webhook",
 
   // experiments
   "exp.title": "Эксперименты",

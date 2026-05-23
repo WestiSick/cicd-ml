@@ -31,6 +31,16 @@ type Repo struct {
 	LastError       *string    `json:"last_error,omitempty"`
 	IsSeed          bool       `json:"is_seed"`
 	AddedAt         time.Time  `json:"added_at"`
+
+	// Webhook installation tracking — populated by EnsureWebhook chain.
+	// WebhookStatus is one of: not_attempted, installed, failed_no_access,
+	// failed_unreachable, failed_other. See db/migrations/00003 for the
+	// canonical comment.
+	WebhookID          *int64     `json:"webhook_id,omitempty"`
+	WebhookURL         *string    `json:"webhook_url,omitempty"`
+	WebhookInstalledAt *time.Time `json:"webhook_installed_at,omitempty"`
+	WebhookStatus      string     `json:"webhook_status"`
+	WebhookError       *string    `json:"webhook_error,omitempty"`
 }
 
 func (r Repo) Slug() string { return r.Owner + "/" + r.Name }
@@ -94,10 +104,62 @@ func (d *DB) AddRepo(ctx context.Context, p AddRepoParams) (Repo, error) {
 		  SET is_seed = repos.is_seed OR EXCLUDED.is_seed
 		RETURNING id, owner, name, github_id, default_branch, tracked_branches,
 		          status, last_synced_at, oldest_run_at, newest_run_at,
-		          runs_count, jobs_count, last_error, is_seed, added_at
+		          runs_count, jobs_count, last_error, is_seed, added_at,
+		          webhook_id, webhook_url, webhook_installed_at,
+		          webhook_status, webhook_error
 	`, p.Owner, p.Name, p.TrackedBranches, p.IsSeed)
 
 	return scanRepo(row)
+}
+
+// SetRepoWebhook records the outcome of an EnsureWebhook attempt. Pass
+// hookID=0 and url="" with a failure status to record a non-installed
+// state without overwriting any prior hook id.
+func (d *DB) SetRepoWebhook(ctx context.Context, repoID int64, hookID int64, url, status, errMsg string) error {
+	var hookIDArg any = nil
+	if hookID > 0 {
+		hookIDArg = hookID
+	}
+	var urlArg any = nil
+	if url != "" {
+		urlArg = url
+	}
+	var errArg any = nil
+	if errMsg != "" {
+		errArg = errMsg
+	}
+	installedAt := "NULL"
+	if status == "installed" {
+		installedAt = "now()"
+	}
+	q := `
+		UPDATE repos SET
+		  webhook_id           = COALESCE($2, webhook_id),
+		  webhook_url          = COALESCE($3, webhook_url),
+		  webhook_installed_at = ` + installedAt + `,
+		  webhook_status       = $4,
+		  webhook_error        = $5
+		WHERE id = $1
+	`
+	_, err := d.Pool.Exec(ctx, q, repoID, hookIDArg, urlArg, status, errArg)
+	return err
+}
+
+// ClearRepoWebhook flips a repo back to "not_attempted" and forgets the
+// hook id — called from DELETE /api/repos/{id}/webhook after the hook
+// has been removed on GitHub's side. Safe to call when no hook was
+// installed (no-op besides setting status).
+func (d *DB) ClearRepoWebhook(ctx context.Context, repoID int64) error {
+	_, err := d.Pool.Exec(ctx, `
+		UPDATE repos SET
+		  webhook_id           = NULL,
+		  webhook_url          = NULL,
+		  webhook_installed_at = NULL,
+		  webhook_status       = 'not_attempted',
+		  webhook_error        = NULL
+		WHERE id = $1
+	`, repoID)
+	return err
 }
 
 // UpdateRepoStatus flips the status field — used by pause/resume buttons
@@ -145,7 +207,9 @@ func (d *DB) ListRepos(ctx context.Context) ([]Repo, error) {
 	rows, err := d.Pool.Query(ctx, `
 		SELECT id, owner, name, github_id, default_branch, tracked_branches,
 		       status, last_synced_at, oldest_run_at, newest_run_at,
-		       runs_count, jobs_count, last_error, is_seed, added_at
+		       runs_count, jobs_count, last_error, is_seed, added_at,
+		       webhook_id, webhook_url, webhook_installed_at,
+		       webhook_status, webhook_error
 		FROM repos
 		ORDER BY added_at DESC, id DESC
 	`)
@@ -175,6 +239,8 @@ func scanRepo(s scanner) (Repo, error) {
 		&r.TrackedBranches, &r.Status, &r.LastSyncedAt, &r.OldestRunAt,
 		&r.NewestRunAt, &r.RunsCount, &r.JobsCount, &r.LastError,
 		&r.IsSeed, &r.AddedAt,
+		&r.WebhookID, &r.WebhookURL, &r.WebhookInstalledAt,
+		&r.WebhookStatus, &r.WebhookError,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

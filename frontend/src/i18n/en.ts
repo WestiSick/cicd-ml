@@ -117,6 +117,17 @@ export const en: Record<TranslationKey, string> = {
   "datasets.detail.branches": "Branches",
   "datasets.detail.conclusions": "Conclusions",
   "datasets.detail.back": "Back to datasets",
+  "datasets.webhook.installed": "Webhook live",
+  "datasets.webhook.not_attempted": "Webhook not installed",
+  "datasets.webhook.failed_no_access": "Webhook: no admin access",
+  "datasets.webhook.failed_unreachable": "Webhook: public URL not set",
+  "datasets.webhook.failed_other": "Webhook: install failed",
+  "datasets.webhook.install": "Install webhook",
+  "datasets.webhook.remove": "Remove webhook",
+  "datasets.webhook.tooltip_installed": "GitHub will POST workflow_run events to {url}",
+  "datasets.webhook.toast.installed": "Webhook installed",
+  "datasets.webhook.toast.removed": "Webhook removed",
+  "datasets.webhook.toast.failed": "Webhook install failed",
 
   // experiments
   "exp.title": "Experiments",

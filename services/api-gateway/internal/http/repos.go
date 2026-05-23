@@ -102,6 +102,12 @@ func (s *Server) addRepo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Fire-and-forget webhook install. The repo row is already saved;
+	// the install runs in a goroutine and writes its outcome back to
+	// the webhook_* columns. Plan §«Live webhook» requires zero manual
+	// steps for repos the user has admin access to.
+	s.installWebhookAsync(repo.ID, repo.Owner, repo.Name, body.GithubToken)
+
 	writeJSON(w, http.StatusCreated, repo)
 }
 
