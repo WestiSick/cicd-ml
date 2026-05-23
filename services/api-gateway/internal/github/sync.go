@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -26,9 +29,22 @@ import (
 //   - Rate-limit-aware: on 403/429 we wait until reset, then resume.
 //     The wait shows up in the UI as a progress message so the user
 //     understands the pause.
+//   - **Per-run work is parallel.** GetCommit + ListRunJobs are I/O-bound
+//     calls to GitHub with ~150–300ms RTT each. Running them serially
+//     produces a ~50ms-per-run wall-clock floor that dominates total
+//     sync time even though the rate-limit budget (5000/h with a PAT)
+//     is barely touched. A bounded worker pool (default 12) ingests a
+//     page of 100 runs in ~5s instead of ~30s. The bound also keeps us
+//     friendly to api.github.com — 12 concurrent requests is well under
+//     GitHub's abuse-detection thresholds.
 type Syncer struct {
 	DB     *store.DB
 	Client *Client
+
+	// Concurrency caps the number of in-flight GetCommit + ListRunJobs
+	// goroutines per page. Zero = default (read from env GITHUB_SYNC_CONCURRENCY,
+	// falling back to 12). Override per-test via the field directly.
+	Concurrency int
 }
 
 type RunInput struct {
@@ -69,6 +85,20 @@ func (s syncStats) Encode() string {
 	return string(b)
 }
 
+// concurrency resolves the worker-pool size. Env-var read once per Run
+// to avoid surprise mid-flight changes.
+func (s *Syncer) concurrency() int {
+	if s.Concurrency > 0 {
+		return s.Concurrency
+	}
+	if v := os.Getenv("GITHUB_SYNC_CONCURRENCY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 64 {
+			return n
+		}
+	}
+	return 12
+}
+
 // Run performs a full sync for one repository.
 func (s *Syncer) Run(ctx context.Context, in RunInput, progress Progress) error {
 	owner, name := in.RepoOwner, in.RepoName
@@ -98,6 +128,16 @@ func (s *Syncer) Run(ctx context.Context, in RunInput, progress Progress) error 
 
 	cutoff := time.Now().AddDate(0, -in.Months, 0).UTC()
 	createdFilter := ">=" + cutoff.Format("2006-01-02")
+	workers := s.concurrency()
+
+	// progressGuard serialises the progress callback so 12 parallel
+	// workers don't garble the JSON-encoded stats payload on the wire.
+	var progressGuard sync.Mutex
+	emit := func(seen, total int, msg, tail string) {
+		progressGuard.Lock()
+		defer progressGuard.Unlock()
+		progress(seen, total, msg, tail)
+	}
 
 	// Phase 1: pages of runs (newest first).
 	totalCounted := 0
@@ -114,123 +154,108 @@ func (s *Syncer) Run(ctx context.Context, in RunInput, progress Progress) error 
 
 		if page == 1 {
 			// First page tells us the total — cap progress denominator.
-			progress(0, runs.TotalCount, fmt.Sprintf("found %d runs in last %d months", runs.TotalCount, in.Months), "")
+			emit(0, runs.TotalCount, fmt.Sprintf("found %d runs in last %d months", runs.TotalCount, in.Months), "")
 		}
 
-		for _, r := range runs.WorkflowRuns {
+		// Find the cutoff index within this page. Anything past it is
+		// older than our window — we'll process the prefix in parallel
+		// then bail out cleanly.
+		cutoffIdx := len(runs.WorkflowRuns)
+		for i, r := range runs.WorkflowRuns {
 			if r.CreatedAt.Before(cutoff) {
-				// Older than window — done with this repo.
-				_ = s.DB.UpdateRepoSyncCounters(ctx, repo.ID)
-				progress(totalCounted, totalCounted, "sync complete (older than window)", "")
-				return nil
+				cutoffIdx = i
+				break
 			}
+		}
+		toProcess := runs.WorkflowRuns[:cutoffIdx]
+		hitCutoff := cutoffIdx < len(runs.WorkflowRuns)
 
-			runDBID, err := s.DB.UpsertWorkflowRun(ctx, repo.ID, store.UpsertWorkflowRunParams{
-				RunID:        r.ID,
-				WorkflowName: r.Name,
-				HeadBranch:   r.HeadBranch,
-				HeadSHA:      r.HeadSHA,
-				Event:        r.Event,
-				Status:       r.Status,
-				Conclusion:   r.Conclusion,
-				Actor:        r.Actor.Login,
-				CreatedAt:    r.CreatedAt,
-				RunStartedAt: r.RunStartedAt,
-				UpdatedAt:    r.UpdatedAt,
-			})
-			if err != nil {
-				return fmt.Errorf("upsert run %d: %w", r.ID, err)
+		// Worker pool — each goroutine handles one run end-to-end:
+		// UpsertWorkflowRun, optional GetCommit + UpsertCommit, optional
+		// ListRunJobs + UpsertJob loop. errCh collects fatal errors
+		// (anything that's not a rate-limit, which we retry inline);
+		// the first non-nil cancels the rest via shared ctx.
+		runCtx, cancelRuns := context.WithCancel(ctx)
+		sem := make(chan struct{}, workers)
+		var wg sync.WaitGroup
+		errCh := make(chan error, len(toProcess))
+		var counterMu sync.Mutex
+
+		for _, r := range toProcess {
+			if err := runCtx.Err(); err != nil {
+				break
 			}
-
-			// Commit details — cheap to skip if we already have this SHA
-			// (matrix builds → many workflow_runs share head_sha). Errors
-			// are non-fatal: feature engineering tolerates NULLs in the
-			// commit fields.
-			if r.HeadSHA != "" {
-				if exists, _ := s.DB.CommitExists(ctx, r.HeadSHA); !exists {
-					c, rl3, cerr := s.Client.GetCommit(ctx, owner, name, r.HeadSHA)
-					if rlErr := s.handleRateLimit(ctx, cerr, rl3, progress); rlErr != nil {
-						return rlErr
-					}
-					if cerr == nil {
-						committedAt := c.CommitDetail.Author.Date
-						_ = s.DB.UpsertCommit(ctx, store.UpsertCommitParams{
-							SHA:          c.SHA,
-							RepoID:       repo.ID,
-							Author:       c.Author.Login,
-							Message:      truncateMessage(c.CommitDetail.Message, 280),
-							FilesChanged: len(c.Files),
-							Additions:    c.Stats.Additions,
-							Deletions:    c.Stats.Deletions,
-							CommittedAt:  zeroToNil(committedAt),
-						})
-					}
-				}
+			select {
+			case sem <- struct{}{}:
+			case <-runCtx.Done():
+				break
 			}
+			wg.Add(1)
+			go func(r WorkflowRun) {
+				defer wg.Done()
+				defer func() { <-sem }()
 
-			// Only fetch jobs for runs that have completed — in-flight runs
-			// don't yet have meaningful durations. This also cuts API calls.
-			if r.Status == "completed" {
-				jobs, rl2, jerr := s.Client.ListRunJobs(ctx, owner, name, r.ID)
-				if err := s.handleRateLimit(ctx, jerr, rl2, progress); err != nil {
-					return err
-				}
-				for _, j := range jobs {
-					var dur *int
-					if j.StartedAt != nil && j.CompletedAt != nil {
-						d := int(j.CompletedAt.Sub(*j.StartedAt).Seconds())
-						if d >= 0 {
-							dur = &d
-						}
+				if err := s.processRun(runCtx, repo.ID, owner, name, r, emit); err != nil {
+					select {
+					case errCh <- err:
+					default:
 					}
-					stepsCount := len(j.Steps)
-					if _, err := s.DB.UpsertJob(ctx, runDBID, store.UpsertJobParams{
-						GithubJobID: j.ID,
-						Name:        j.Name,
-						Status:      j.Status,
-						Conclusion:  j.Conclusion,
-						StartedAt:   j.StartedAt,
-						CompletedAt: j.CompletedAt,
-						DurationSec: dur,
-						RunnerName:  j.RunnerName,
-						RunnerGroup: j.RunnerGroup,
-						Labels:      j.Labels,
-						StepsCount:  &stepsCount,
-					}); err != nil {
-						return fmt.Errorf("upsert job %d: %w", j.ID, err)
-					}
+					cancelRuns()
+					return
 				}
-			}
 
-			totalCounted++
-			if totalCounted%10 == 0 {
-				elapsed := time.Since(startedAt).Seconds()
-				rate := 0.0
-				if elapsed > 0 {
-					rate = float64(totalCounted) / elapsed
+				counterMu.Lock()
+				totalCounted++
+				done := totalCounted
+				counterMu.Unlock()
+
+				if done%10 == 0 {
+					elapsed := time.Since(startedAt).Seconds()
+					perSec := 0.0
+					if elapsed > 0 {
+						perSec = float64(done) / elapsed
+					}
+					eta := 0.0
+					if perSec > 0 && runs.TotalCount > done {
+						eta = float64(runs.TotalCount-done) / perSec
+					}
+					stats := syncStats{
+						Phase:         "fetching_runs",
+						Page:          page,
+						RunsSeen:      done,
+						RunsTotal:     runs.TotalCount,
+						JobsPerSec:    perSec,
+						EtaSeconds:    eta,
+						RateRemaining: rl.Remaining,
+						RateLimit:     rl.Limit,
+						RateResetUnix: rl.ResetAt.Unix(),
+					}
+					emit(done, runs.TotalCount,
+						fmt.Sprintf("%s/%s: %d/%d runs (page %d, %d/%d rate, ~%.1f r/s)",
+							owner, name, done, runs.TotalCount, page, rl.Remaining, rl.Limit, perSec),
+						stats.Encode())
 				}
-				eta := 0.0
-				if rate > 0 && runs.TotalCount > totalCounted {
-					eta = float64(runs.TotalCount-totalCounted) / rate
-				}
-				stats := syncStats{
-					Phase:         "fetching_runs",
-					Page:          page,
-					RunsSeen:      totalCounted,
-					RunsTotal:     runs.TotalCount,
-					JobsPerSec:    rate,
-					EtaSeconds:    eta,
-					RateRemaining: rl.Remaining,
-					RateLimit:     rl.Limit,
-					RateResetUnix: rl.ResetAt.Unix(),
-				}
-				progress(totalCounted, runs.TotalCount, fmt.Sprintf("%s/%s: %d/%d runs (page %d, %d/%d rate)",
-					owner, name, totalCounted, runs.TotalCount, page, rl.Remaining, rl.Limit), stats.Encode())
+			}(r)
+		}
+		wg.Wait()
+		cancelRuns()
+		close(errCh)
+
+		// Surface the first fatal error from any worker.
+		for werr := range errCh {
+			if werr != nil {
+				return werr
 			}
 		}
 
 		// Update counters every page so the UI sees the live totals.
 		_ = s.DB.UpdateRepoSyncCounters(ctx, repo.ID)
+
+		if hitCutoff {
+			emit(totalCounted, totalCounted, "sync complete (older than window)",
+				syncStats{Phase: "done", RunsSeen: totalCounted, RunsTotal: totalCounted}.Encode())
+			return nil
+		}
 
 		// End of pagination.
 		if len(runs.WorkflowRuns) < 100 {
@@ -239,8 +264,101 @@ func (s *Syncer) Run(ctx context.Context, in RunInput, progress Progress) error 
 		page++
 	}
 
-	progress(totalCounted, totalCounted, fmt.Sprintf("%s/%s: sync complete", owner, name),
+	emit(totalCounted, totalCounted, fmt.Sprintf("%s/%s: sync complete", owner, name),
 		syncStats{Phase: "done", RunsSeen: totalCounted, RunsTotal: totalCounted}.Encode())
+	return nil
+}
+
+// processRun handles one workflow_run end-to-end. Safe to call from a
+// goroutine pool because every dependency (DB, Client, progress) is
+// already concurrent-safe (pgxpool, &http.Client, mutexed callback).
+//
+// Returns a fatal error only for things the caller can't recover from
+// (DB write failure, context cancellation). GetCommit / ListRunJobs
+// errors that aren't rate-limit are logged and skipped — feature
+// engineering tolerates missing commit-fields and jobs are independent
+// per run, so a single bad fetch shouldn't poison the whole sync.
+func (s *Syncer) processRun(ctx context.Context, repoID int64, owner, name string, r WorkflowRun, progress Progress) error {
+	runDBID, err := s.DB.UpsertWorkflowRun(ctx, repoID, store.UpsertWorkflowRunParams{
+		RunID:        r.ID,
+		WorkflowName: r.Name,
+		HeadBranch:   r.HeadBranch,
+		HeadSHA:      r.HeadSHA,
+		Event:        r.Event,
+		Status:       r.Status,
+		Conclusion:   r.Conclusion,
+		Actor:        r.Actor.Login,
+		CreatedAt:    r.CreatedAt,
+		RunStartedAt: r.RunStartedAt,
+		UpdatedAt:    r.UpdatedAt,
+	})
+	if err != nil {
+		return fmt.Errorf("upsert run %d: %w", r.ID, err)
+	}
+
+	// Commit details — cheap to skip if we already have this SHA
+	// (matrix builds → many workflow_runs share head_sha). Errors are
+	// non-fatal: feature engineering tolerates NULLs in the commit fields.
+	if r.HeadSHA != "" {
+		if exists, _ := s.DB.CommitExists(ctx, r.HeadSHA); !exists {
+			c, rl, cerr := s.Client.GetCommit(ctx, owner, name, r.HeadSHA)
+			if rlErr := s.handleRateLimit(ctx, cerr, rl, progress); rlErr != nil {
+				return rlErr
+			}
+			if cerr == nil {
+				committedAt := c.CommitDetail.Author.Date
+				_ = s.DB.UpsertCommit(ctx, store.UpsertCommitParams{
+					SHA:          c.SHA,
+					RepoID:       repoID,
+					Author:       c.Author.Login,
+					Message:      truncateMessage(c.CommitDetail.Message, 280),
+					FilesChanged: len(c.Files),
+					Additions:    c.Stats.Additions,
+					Deletions:    c.Stats.Deletions,
+					CommittedAt:  zeroToNil(committedAt),
+				})
+			}
+		}
+	}
+
+	// Only fetch jobs for runs that have completed — in-flight runs
+	// don't yet have meaningful durations. This also cuts API calls.
+	if r.Status == "completed" {
+		jobs, rl2, jerr := s.Client.ListRunJobs(ctx, owner, name, r.ID)
+		if rlErr := s.handleRateLimit(ctx, jerr, rl2, progress); rlErr != nil {
+			return rlErr
+		}
+		if jerr != nil {
+			// Non-rate-limit error — log but don't fail the whole sync.
+			log.Warn().Err(jerr).Int64("run_id", r.ID).Msg("list jobs failed; skipping")
+			return nil
+		}
+		for _, j := range jobs {
+			var dur *int
+			if j.StartedAt != nil && j.CompletedAt != nil {
+				d := int(j.CompletedAt.Sub(*j.StartedAt).Seconds())
+				if d >= 0 {
+					dur = &d
+				}
+			}
+			stepsCount := len(j.Steps)
+			if _, err := s.DB.UpsertJob(ctx, runDBID, store.UpsertJobParams{
+				GithubJobID: j.ID,
+				Name:        j.Name,
+				Status:      j.Status,
+				Conclusion:  j.Conclusion,
+				StartedAt:   j.StartedAt,
+				CompletedAt: j.CompletedAt,
+				DurationSec: dur,
+				RunnerName:  j.RunnerName,
+				RunnerGroup: j.RunnerGroup,
+				Labels:      j.Labels,
+				StepsCount:  &stepsCount,
+			}); err != nil {
+				return fmt.Errorf("upsert job %d: %w", j.ID, err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -268,6 +386,12 @@ func zeroToNil(t time.Time) *time.Time {
 // handleRateLimit centralises the 403/429 retry policy. If the response
 // was a true rate-limit, we sleep until reset and signal the UI; any
 // other error we surface as-is.
+//
+// Concurrent-safe: 12 workers can all be in handleRateLimit at the same
+// time (likely when the API limit just hit). Each will independently
+// wait until reset — slightly wasteful (12 sleeping goroutines vs 1
+// with a shared barrier) but correct. The progress callback is mutexed
+// by the caller's `emit` wrapper so the messages don't garble.
 func (s *Syncer) handleRateLimit(ctx context.Context, err error, rl RateLimit, progress Progress) error {
 	if err == nil {
 		return nil
