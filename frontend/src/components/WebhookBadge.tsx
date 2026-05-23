@@ -78,7 +78,9 @@ export function WebhookBadge({ repoID, status, webhookURL, errorMessage }: Props
       : errorMessage || "";
 
   return (
-    <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+    // flex with wrap so on a narrow card the pill and the Install/Remove
+    // button stack onto two lines instead of overflowing the card width.
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
       <span
         title={tooltip}
         style={{
@@ -96,6 +98,10 @@ export function WebhookBadge({ repoID, status, webhookURL, errorMessage }: Props
           background: palette.bg,
           border: palette.border ? `1px solid ${palette.border}` : "none",
           cursor: tooltip ? "help" : "default",
+          maxWidth: "100%",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
         }}
       >
         <Dot color={palette.fg} />

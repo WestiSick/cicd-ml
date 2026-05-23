@@ -124,7 +124,10 @@ export function Datasets() {
       )}
 
       {q.data && q.data.length > 0 && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s-3)" }}>
+        // auto-fill + minmax: 2 columns on wide screens, 1 column on narrow
+        // ones — instead of forcing 1fr 1fr which overflowed the right card
+        // when slug + action buttons + webhook badge couldn't fit.
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(560px, 1fr))", gap: "var(--s-3)" }}>
           {q.data.map((r) => (
             <RepoCard
               key={r.id}
@@ -195,6 +198,11 @@ function RepoCard({
 
   return (
     <Card>
+      {/* Header row — two-row layout: slug + status chip on top, action
+          buttons on a separate row that can wrap. Previously slug + 4
+          buttons + chip + webhook badge tried to fit on one line and
+          truncated the right column on /datasets at common viewport
+          widths. */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "var(--s-2)" }}>
         <Link
           to={`/datasets/${repo.id}`}
@@ -204,39 +212,55 @@ function RepoCard({
             fontWeight: 500,
             color: "var(--text-primary)",
             textDecoration: "none",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            minWidth: 0,
+            flex: "1 1 auto",
           }}
         >
           {repo.owner}/{repo.name}
         </Link>
-        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
-          {canSync && (
-            <Button size="sm" variant="ghost" onClick={() => sync.mutate()} loading={sync.isPending}>
-              {repo.status === "idle" ? t("common.start_sync") : t("common.sync")}
-            </Button>
-          )}
-          {repo.status === "paused" ? (
-            <Button size="sm" variant="ghost" onClick={() => resume.mutate()} loading={resume.isPending}>
-              {t("common.resume")}
-            </Button>
-          ) : (
-            <Button size="sm" variant="ghost" onClick={() => pause.mutate()} loading={pause.isPending}>
-              {t("common.pause")}
-            </Button>
-          )}
-          <Button size="sm" variant="ghost" onClick={() => resync.mutate()} loading={resync.isPending}>
-            {t("common.resync")}
+        <StatusChip status={repo.status} />
+      </div>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: "var(--s-2)",
+          marginTop: "var(--s-2)",
+        }}
+      >
+        {canSync && (
+          <Button size="sm" variant="ghost" onClick={() => sync.mutate()} loading={sync.isPending}>
+            {repo.status === "idle" ? t("common.start_sync") : t("common.sync")}
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(true)}>
-            {t("common.remove")}
+        )}
+        {repo.status === "paused" ? (
+          <Button size="sm" variant="ghost" onClick={() => resume.mutate()} loading={resume.isPending}>
+            {t("common.resume")}
           </Button>
-          <StatusChip status={repo.status} />
-        </div>
+        ) : (
+          <Button size="sm" variant="ghost" onClick={() => pause.mutate()} loading={pause.isPending}>
+            {t("common.pause")}
+          </Button>
+        )}
+        <Button size="sm" variant="ghost" onClick={() => resync.mutate()} loading={resync.isPending}>
+          {t("common.resync")}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(true)}>
+          {t("common.remove")}
+        </Button>
       </div>
 
+      {/* Stats row — minmax(0, 1fr) so long values truncate gracefully
+          via overflow:hidden in the <Stat> children, rather than pushing
+          the card width past the grid track. */}
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "1fr 1fr 1fr 1fr",
+          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
           gap: "var(--s-3)",
           marginTop: "var(--s-3)",
         }}
@@ -334,11 +358,31 @@ function Stat({
   small?: boolean;
 }) {
   return (
-    <div>
-      <div className="caps" style={{ color: "var(--text-tertiary)" }}>{label}</div>
+    // minWidth:0 + overflow:hidden lets the grid track actually compress
+    // this cell when the parent's minmax(0, 1fr) tries to fit everything.
+    // Without it, the inner text would force the grid track wider and
+    // push the whole card past its allotted column.
+    <div style={{ minWidth: 0, overflow: "hidden" }} title={value}>
+      <div
+        className="caps"
+        style={{
+          color: "var(--text-tertiary)",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {label}
+      </div>
       <div
         className={mono ? "mono" : undefined}
-        style={{ fontSize: small ? "var(--fs-12)" : "var(--fs-16)", marginTop: 2 }}
+        style={{
+          fontSize: small ? "var(--fs-12)" : "var(--fs-16)",
+          marginTop: 2,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
       >
         {value}
       </div>
