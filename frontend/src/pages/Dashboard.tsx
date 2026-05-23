@@ -121,8 +121,13 @@ export function Dashboard() {
           label={t("dashboard.kpi.active_model")}
           value={systemQ.data?.active_model ? `${systemQ.data.active_model.algo}` : "—"}
           hint={
-            systemQ.data?.active_model?.metrics?.test_mae !== undefined
-              ? `MAE ${formatDuration(systemQ.data.active_model.metrics.test_mae)}`
+            // ml-service stores the metric under `mae_test_sec` (see
+            // services/ml-service/app/models/base.py::_compute_metrics).
+            // Earlier this read `test_mae` and always fell back to the
+            // "not trained yet" hint — even on an active model with
+            // perfectly good metrics.
+            systemQ.data?.active_model?.metrics?.mae_test_sec !== undefined
+              ? `MAE ${formatDuration(systemQ.data.active_model.metrics.mae_test_sec)}`
               : t("dashboard.kpi.not_trained")
           }
         />
