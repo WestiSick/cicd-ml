@@ -110,8 +110,10 @@ export function Admin() {
             <tbody>
               {activity.data.slice(0, 50).map((e) => (
                 <tr key={e.id} style={{ borderTop: "1px solid var(--border-subtle)" }}>
-                  <Td mono small>{formatRelativeTime(e.occurred_at)}</Td>
-                  <Td mono>{e.actor}</Td>
+                  <Td mono small>
+                    <span title={e.at}>{formatRelativeTime(e.at)}</span>
+                  </Td>
+                  <Td mono>{e.actor ?? "system"}</Td>
                   <Td mono>{e.action}</Td>
                   <Td mono small>{e.target ?? "—"}</Td>
                   <Td>

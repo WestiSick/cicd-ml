@@ -34,8 +34,11 @@ export async function fetchSystemHealth(): Promise<SystemHealth> {
 
 export type ActivityEntry = {
   id: number;
-  occurred_at: string;
-  actor: string;
+  // Backend column is `at` (timestamp default now()) — store/activity.go
+  // serialises it under the same name. The earlier `occurred_at` here
+  // never matched, so every row's time showed "—".
+  at: string;
+  actor?: string;
   action: string;
   target?: string;
   message?: string;
