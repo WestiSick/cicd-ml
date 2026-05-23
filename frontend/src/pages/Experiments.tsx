@@ -81,6 +81,7 @@ export function Experiments() {
   const [algo, setAlgo] = useState("xgboost");
   const [activate, setActivate] = useState(true);
   const [optunaTrials, setOptunaTrials] = useState(0); // 0 = off
+  const [errorWeighted, setErrorWeighted] = useState(false);
   const [cvSplits, setCvSplits] = useState(5);
   const [cvResult, setCvResult] = useState<CVResponse | null>(null);
   const [showWizard, setShowWizard] = useState(false);
@@ -95,8 +96,9 @@ export function Experiments() {
     mutationFn: () => startTraining({
       algo,
       activate,
-      name: `${algo}${optunaTrials >= 2 ? `-optuna${optunaTrials}` : ""}-${new Date().toISOString().slice(0, 16)}`,
+      name: `${algo}${optunaTrials >= 2 ? `-optuna${optunaTrials}` : ""}${errorWeighted ? "-ew" : ""}-${new Date().toISOString().slice(0, 16)}`,
       optuna_trials: optunaTrials >= 2 ? optunaTrials : undefined,
+      error_weighted: errorWeighted || undefined,
     }),
     onSuccess: (r) => {
       toast.success(t("exp.toast.queued"), { description: r.message });
@@ -204,6 +206,18 @@ export function Experiments() {
               style={{ accentColor: "var(--accent)" }}
             />
             <span>{t("exp.activate_on_finish")}</span>
+          </label>
+          <label
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "var(--fs-13)" }}
+            title={t("exp.error_weighted.hint")}
+          >
+            <input
+              type="checkbox"
+              checked={errorWeighted}
+              onChange={(e) => setErrorWeighted(e.target.checked)}
+              style={{ accentColor: "var(--accent)" }}
+            />
+            <span>{t("exp.error_weighted")}</span>
           </label>
         </div>
 

@@ -168,6 +168,8 @@ export const en: Record<TranslationKey, string> = {
   "exp.export_pack": "Export thesis pack",
   "exp.new_run": "New training run",
   "exp.activate_on_finish": "Activate on finish",
+  "exp.error_weighted": "Error-weighted",
+  "exp.error_weighted.hint": "Up-weight rows the previous model got wrong via sample_weight (= 1 + α × relative_error). Tier-2 of continual learning that pairs with the live per-(repo, workflow) calibration in /admin → Calibrations.",
   "exp.optuna.label": "Hyperparameter search (Optuna)",
   "exp.optuna.off": "off",
   "exp.optuna.trials": "{n} trials",

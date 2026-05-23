@@ -214,12 +214,14 @@ func wrap(fn func(ctx context.Context, job store.BGJob, progress func(int, int, 
 func trainHandler(mlClient *ml.Client) bgjobs.Handler {
 	return func(ctx context.Context, job store.BGJob, progress bgjobs.ProgressFn) error {
 		var payload struct {
-			Algo         string         `json:"algo"`
-			Params       map[string]any `json:"params"`
-			RepoIDs      []int64        `json:"repo_ids"`
-			Activate     bool           `json:"activate"`
-			Name         string         `json:"name"`
-			OptunaTrials int            `json:"optuna_trials"`
+			Algo             string         `json:"algo"`
+			Params           map[string]any `json:"params"`
+			RepoIDs          []int64        `json:"repo_ids"`
+			Activate         bool           `json:"activate"`
+			Name             string         `json:"name"`
+			OptunaTrials     int            `json:"optuna_trials"`
+			ErrorWeighted    bool           `json:"error_weighted"`
+			ErrorWeightAlpha float64        `json:"error_weight_alpha"`
 		}
 		if err := json.Unmarshal(job.Payload, &payload); err != nil {
 			return fmt.Errorf("train_model payload: %w", err)
@@ -234,12 +236,14 @@ func trainHandler(mlClient *ml.Client) bgjobs.Handler {
 		if payload.OptunaTrials >= 2 {
 			progress(1, 3, fmt.Sprintf("Optuna search: %s × %d trials", payload.Algo, payload.OptunaTrials), "")
 			resp, err := mlClient.TrainOptuna(ctx, ml.OptunaRequest{
-				Algo:          payload.Algo,
-				NTrials:       payload.OptunaTrials,
-				RepoIDs:       payload.RepoIDs,
-				Name:          payload.Name,
-				TrainingJobID: job.ID,
-				Activate:      payload.Activate,
+				Algo:             payload.Algo,
+				NTrials:          payload.OptunaTrials,
+				RepoIDs:          payload.RepoIDs,
+				Name:             payload.Name,
+				TrainingJobID:    job.ID,
+				Activate:         payload.Activate,
+				ErrorWeighted:    payload.ErrorWeighted,
+				ErrorWeightAlpha: payload.ErrorWeightAlpha,
 			})
 			if err != nil {
 				return err
@@ -252,12 +256,14 @@ func trainHandler(mlClient *ml.Client) bgjobs.Handler {
 		progress(1, 3, "calling ml-service /train: "+payload.Algo, "")
 
 		req := ml.TrainRequest{
-			Algo:          payload.Algo,
-			Params:        payload.Params,
-			RepoIDs:       payload.RepoIDs,
-			Name:          payload.Name,
-			TrainingJobID: job.ID,
-			Activate:      payload.Activate,
+			Algo:             payload.Algo,
+			Params:           payload.Params,
+			RepoIDs:          payload.RepoIDs,
+			Name:             payload.Name,
+			TrainingJobID:    job.ID,
+			Activate:         payload.Activate,
+			ErrorWeighted:    payload.ErrorWeighted,
+			ErrorWeightAlpha: payload.ErrorWeightAlpha,
 		}
 		resp, err := mlClient.Train(ctx, req)
 		if err != nil {

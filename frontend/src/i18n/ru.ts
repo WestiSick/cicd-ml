@@ -177,6 +177,8 @@ export const ru: Record<TranslationKey, string> = {
   "exp.export_pack": "Экспорт пакета для диссертации",
   "exp.new_run": "Новый запуск обучения",
   "exp.activate_on_finish": "Активировать после завершения",
+  "exp.error_weighted": "Учиться на ошибках",
+  "exp.error_weighted.hint": "Увеличить вес строк, на которых предыдущая модель ошибалась (= 1 + α × relative_error). Tier-2 continual learning в паре с live-калибровкой per-(repo, workflow) в /admin → Калибровка.",
   "exp.optuna.label": "Подбор гиперпараметров (Optuna)",
   "exp.optuna.off": "выкл",
   "exp.optuna.trials": "{n} итераций",

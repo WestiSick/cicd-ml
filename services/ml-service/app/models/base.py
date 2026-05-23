@@ -71,8 +71,16 @@ class BaseModel:
         X_test/y_test go unused in the default — they're available so
         subclasses don't need to plumb them separately.
         """
-        del X_test, y_test, params  # explicitly unused here
-        self.estimator.fit(X_train, y_train)
+        del X_test, y_test  # explicitly unused here
+        # Honour sample_weight when the training pipeline injected one
+        # (error-weighted training, see TrainRequest.error_weighted).
+        # sklearn-style estimators accept this kwarg; MLP / neural-net
+        # subclasses that don't support it should override _fit_with_eval.
+        sample_weight = (params or {}).get("_sample_weight")
+        if sample_weight is not None:
+            self.estimator.fit(X_train, y_train, sample_weight=sample_weight)
+        else:
+            self.estimator.fit(X_train, y_train)
 
     # ---- shared lifecycle --------------------------------------------
 

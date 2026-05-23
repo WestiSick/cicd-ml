@@ -48,8 +48,10 @@ class LightGBMModel(BaseModel):
         """
         import logging
         _log = logging.getLogger(__name__)
+        sample_weight = (params or {}).get("_sample_weight")
         self.estimator.fit(
             X_train, y_train,
+            sample_weight=sample_weight,
             eval_set=[(X_train, y_train), (X_test, y_test)],
             eval_names=["training", "validation"],
         )

@@ -26,6 +26,14 @@ export type StartTrainingRequest = {
   /** When >= 2, ml-service runs an Optuna hyperparameter search of
    *  `optuna_trials` trials and persists the best-found model. */
   optuna_trials?: number;
+  /** Tier-2 continual learning. When true, ml-service up-weights
+   *  training rows the previous model got wrong via sample_weight.
+   *  Pairs with the webhook-time per-(repo, workflow) EMA calibration
+   *  surfaced in /admin → Calibrations. */
+  error_weighted?: boolean;
+  /** Strength of the up-weighting. Defaults to 1.0 server-side.
+   *  Useful values 0.5–2.0; larger amplifies outliers harder. */
+  error_weight_alpha?: number;
 };
 
 export type StartTrainingResponse = {

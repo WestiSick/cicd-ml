@@ -28,6 +28,13 @@ class TrainBody(BaseModel):
     name: str | None = None
     training_job_id: int | None = None
     activate: bool = False
+    # error_weighted: tier-2 continual learning. Up-weights training rows
+    # where the previous model produced a high relative error so the new
+    # fit pays disproportionate attention to slices it currently gets
+    # wrong. Pairs with the webhook-time per-(repo, workflow) calibration
+    # (tier 1) for a two-layer "learn from mistakes" system.
+    error_weighted: bool = False
+    error_weight_alpha: float = Field(1.0, ge=0.0, le=5.0)
 
 
 @router.post("/")
@@ -42,6 +49,8 @@ async def start_training(body: TrainBody) -> dict[str, Any]:
         name=name,
         training_job_id=body.training_job_id,
         activate=body.activate,
+        error_weighted=body.error_weighted,
+        error_weight_alpha=body.error_weight_alpha,
     )
     try:
         out = train_one(s.postgres_dsn, s.models_dir, req)
@@ -145,6 +154,8 @@ class OptunaBody(BaseModel):
     name: str | None = None
     training_job_id: int | None = None
     activate: bool = False
+    error_weighted: bool = False
+    error_weight_alpha: float = Field(1.0, ge=0.0, le=5.0)
 
 
 @router.post("/optuna")
@@ -180,6 +191,8 @@ async def start_optuna_search(body: OptunaBody) -> dict[str, Any]:
         name=name,
         training_job_id=body.training_job_id,
         activate=body.activate,
+        error_weighted=body.error_weighted,
+        error_weight_alpha=body.error_weight_alpha,
     )
     try:
         out = train_one(s.postgres_dsn, s.models_dir, req)

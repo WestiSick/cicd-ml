@@ -140,6 +140,49 @@ def attach_commit_file_features(df: pd.DataFrame, dsn: str) -> pd.DataFrame:
     return df
 
 
+def load_prediction_errors(dsn: str) -> dict[int, float]:
+    """For every job that has a stored prediction, return the relative
+    error |predicted - actual| / actual. Used by error-weighted training
+    to up-weight jobs the previous model got most wrong, on the theory
+    that those slices either contain new patterns (drift) or are under-
+    represented in the training set.
+
+    Joins predictions with jobs.duration_sec — rows without an actual
+    duration are skipped (can't compute the error). Returns an empty
+    dict on empty DB so callers can safely call this even on fresh
+    installs.
+
+    Returns: {job_id: relative_error}.
+        relative_error of 0.0 = perfect prediction.
+        relative_error of 0.5 = 50% off (e.g. predicted 30s, actual 20s).
+        Capped at 5.0 to keep one extreme outlier from dominating the
+        sample weights downstream.
+    """
+    sql = """
+        SELECT p.job_id,
+               GREATEST(p.predicted_sec, 0) AS predicted,
+               j.duration_sec AS actual
+        FROM predictions p
+        JOIN jobs j ON j.id = p.job_id
+        WHERE j.duration_sec IS NOT NULL
+          AND j.duration_sec > 0
+    """
+    out: dict[int, float] = {}
+    with connection(dsn) as conn:
+        rows = conn.execute(text(sql)).all()
+    for jid, pred, actual in rows:
+        if actual is None or actual <= 0:
+            continue
+        err = abs(float(pred) - float(actual)) / float(actual)
+        # Clamp extremes — a model that predicted 1s where actual was
+        # 600s shouldn't make that single job 600× more important than
+        # an average sample. 5× is generous but bounded.
+        if err > 5.0:
+            err = 5.0
+        out[int(jid)] = err
+    return out
+
+
 def lookup_hours_since_last_run(dsn: str, owner: str, name: str) -> float:
     """How many hours since the most recent workflow_run for this repo.
 

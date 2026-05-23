@@ -26,13 +26,19 @@ import (
 // long-running task. Same UX as setup or refresh.
 func (s *Server) startTraining(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Algo         string         `json:"algo"`
-		Params       map[string]any `json:"params"`
-		RepoIDs      []int64        `json:"repo_ids"`
-		Since        string         `json:"since"`
-		Activate     bool           `json:"activate"`
-		Name         string         `json:"name"`
-		OptunaTrials int            `json:"optuna_trials"`
+		Algo             string         `json:"algo"`
+		Params           map[string]any `json:"params"`
+		RepoIDs          []int64        `json:"repo_ids"`
+		Since            string         `json:"since"`
+		Activate         bool           `json:"activate"`
+		Name             string         `json:"name"`
+		OptunaTrials     int            `json:"optuna_trials"`
+		// Tier-2 continual learning. ml-service consumes both fields;
+		// they round-trip through the bg_job payload verbatim (see
+		// bgjobs handling of train_model kind), so all we do here is
+		// accept them in the request body.
+		ErrorWeighted    bool    `json:"error_weighted"`
+		ErrorWeightAlpha float64 `json:"error_weight_alpha"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body",

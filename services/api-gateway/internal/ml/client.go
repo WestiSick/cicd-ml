@@ -40,6 +40,14 @@ type TrainRequest struct {
 	Name          string         `json:"name,omitempty"`
 	TrainingJobID int64          `json:"training_job_id,omitempty"`
 	Activate      bool           `json:"activate"`
+
+	// ErrorWeighted: tier-2 continual learning. When true, ml-service
+	// pulls the previous model's per-job prediction errors from the
+	// `predictions` table and assigns higher sample_weight to rows it
+	// got wrong. Pairs with the webhook-time per-(repo, workflow)
+	// calibration for two-layer "learn from mistakes" behaviour.
+	ErrorWeighted     bool    `json:"error_weighted,omitempty"`
+	ErrorWeightAlpha  float64 `json:"error_weight_alpha,omitempty"`
 }
 
 type TrainResponse struct {
@@ -74,6 +82,9 @@ type OptunaRequest struct {
 	Name          string  `json:"name,omitempty"`
 	TrainingJobID int64   `json:"training_job_id,omitempty"`
 	Activate      bool    `json:"activate"`
+
+	ErrorWeighted    bool    `json:"error_weighted,omitempty"`
+	ErrorWeightAlpha float64 `json:"error_weight_alpha,omitempty"`
 }
 
 // TrainOptuna runs an Optuna hyperparameter search end-to-end:

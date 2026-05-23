@@ -36,6 +36,21 @@ class TrainRequest:
     name: str
     training_job_id: int | None
     activate: bool
+    # error_weighted: when True, look up the previous model's per-job
+    # prediction error in the `predictions` table and assign higher
+    # sample_weight to jobs the previous model got wrong. Implements
+    # tier 2 of the two-tier continual learning system: tier 1 is
+    # webhook-time per-(repo, workflow) calibration; tier 2 is
+    # nightly/periodic retraining that bakes the residual into the
+    # model itself. Defaults to False to preserve existing behaviour.
+    error_weighted: bool = False
+    # error_weight_alpha: how strongly to amplify errors. The weight
+    # for job j is `1 + alpha × relative_error`. With alpha=1.0:
+    # a perfectly-predicted job gets weight 1.0, a 50%-off job gets
+    # weight 1.5, a 5× off (capped) job gets weight 6.0. Modest values
+    # (0.5-2.0) work best — too large and the model overfits to
+    # outliers, defeating the point.
+    error_weight_alpha: float = 1.0
 
 
 @dataclass
@@ -85,6 +100,26 @@ def train_one(dsn: str, models_dir: Path, req: TrainRequest) -> TrainOutcome:
     if req.training_job_id and req.training_job_id > 0:
         req.params = dict(req.params or {})
         req.params["_streaming_training_job_id"] = req.training_job_id
+
+    # Error-weighted training (tier 2 of continual learning): up-weight
+    # training rows where the previous model produced a high relative
+    # error, so the next fit pays disproportionate attention to slices
+    # it currently gets wrong. Weights computed from `predictions ⨝ jobs`
+    # and aligned to train_df by job_id. Rows without a prior prediction
+    # get weight 1.0 (= no change from the unweighted baseline).
+    if req.error_weighted:
+        errors = db.load_prediction_errors(dsn)
+        alpha = float(req.error_weight_alpha) if req.error_weight_alpha is not None else 1.0
+        weights = np.array(
+            [1.0 + alpha * errors.get(int(jid), 0.0) for jid in train_df["job_id"].astype(int).tolist()],
+            dtype=float,
+        )
+        req.params = dict(req.params or {})
+        req.params["_sample_weight"] = weights
+        log.info(
+            "error-weighted training: %d/%d rows had prior predictions; mean weight %.2f, max %.2f",
+            int(np.sum(weights > 1.0)), len(weights), float(weights.mean()), float(weights.max()),
+        )
 
     result = model.fit(X_train, y_train, X_test, y_test, req.params, names, schema)
 

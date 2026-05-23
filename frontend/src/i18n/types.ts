@@ -173,6 +173,8 @@ export type TranslationKey =
   | "exp.export_pack"
   | "exp.new_run"
   | "exp.activate_on_finish"
+  | "exp.error_weighted"
+  | "exp.error_weighted.hint"
   | "exp.optuna.label"
   | "exp.optuna.off"
   | "exp.optuna.trials"

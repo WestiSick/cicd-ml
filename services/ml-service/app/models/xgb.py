@@ -44,8 +44,12 @@ class XGBoostModel(BaseModel):
         API has shifted across versions, and a plain post-fit loop over
         the evals_result_ is simpler and version-stable.
         """
+        # sample_weight is honoured natively by xgboost.fit. None passes
+        # through cleanly = unweighted, matches baseline behaviour.
+        sample_weight = (params or {}).get("_sample_weight")
         self.estimator.fit(
             X_train, y_train,
+            sample_weight=sample_weight,
             eval_set=[(X_train, y_train), (X_test, y_test)],
             verbose=False,
         )
