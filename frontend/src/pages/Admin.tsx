@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -7,7 +7,7 @@ import { Card } from "@/components/Card";
 import { Button } from "@/components/Button";
 import { StatusChip } from "@/components/StatusChip";
 import { ApiError } from "@/api/client";
-import { fetchActivity, fetchSystemHealth, listWebhookEvents, pauseBGRunner, resumeBGRunner } from "@/api/admin";
+import { fetchActivity, fetchSystemHealth, listCalibrations, listWebhookEvents, pauseBGRunner, resumeBGRunner } from "@/api/admin";
 import { fetchSystemState, saveAdminSettings, type CustomWeights } from "@/api/system";
 import { useT } from "@/i18n";
 import { formatRelativeTime } from "@/lib/format";
@@ -159,7 +159,91 @@ export function Admin() {
           </table>
         )}
       </Card>
+
+      <h2 id="calibrations" style={{ ...sectionTitleStyle, marginTop: "var(--s-8)" }}>
+        {t("admin.calibrations")}
+      </h2>
+      <CalibrationsCard />
     </>
+  );
+}
+
+/* CalibrationsCard — per-(repo, workflow) bias multipliers. EMA-updated
+ * on every workflow_run.completed webhook. Factor far from 1.0 means
+ * the model is consistently off for that slice; predict applies this
+ * silently when n_observations ≥ 3.
+ *
+ * Sorted by |1 − factor| descending so the most-corrected slices float
+ * to the top — operator's attention goes where the bias is largest.
+ */
+function CalibrationsCard() {
+  const t = useT();
+  const q = useQuery({
+    queryKey: ["calibrations"],
+    queryFn: listCalibrations,
+    refetchInterval: 10_000,
+  });
+
+  const rows = useMemo(() => {
+    const data = q.data ?? [];
+    return [...data].sort((a, b) => Math.abs(1 - b.factor) - Math.abs(1 - a.factor));
+  }, [q.data]);
+
+  return (
+    <Card>
+      <p
+        style={{
+          color: "var(--text-tertiary)",
+          fontSize: "var(--fs-12)",
+          margin: "0 0 var(--s-3) 0",
+          maxWidth: 760,
+          lineHeight: 1.5,
+        }}
+      >
+        {t("admin.calibrations.hint")}
+      </p>
+      {q.isLoading && <p style={mutedText}>{t("common.loading")}</p>}
+      {q.data && q.data.length === 0 && (
+        <p style={mutedText}>{t("admin.calibrations.empty")}</p>
+      )}
+      {rows.length > 0 && (
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <Th>{t("admin.calibrations.col.repo")}</Th>
+              <Th>{t("admin.calibrations.col.workflow")}</Th>
+              <Th right>{t("admin.calibrations.col.factor")}</Th>
+              <Th right>{t("admin.calibrations.col.n")}</Th>
+              <Th right>{t("admin.calibrations.col.last_actual")}</Th>
+              <Th right>{t("admin.calibrations.col.last_predicted")}</Th>
+              <Th right>{t("admin.calibrations.col.last_ratio")}</Th>
+              <Th>{t("admin.calibrations.col.updated")}</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const dev = Math.abs(1 - r.factor);
+              const factorColor = dev < 0.1
+                ? "var(--text-secondary)"
+                : dev < 0.3 ? "var(--warn)"
+                : "var(--err)";
+              return (
+                <tr key={`${r.repo_id}|${r.workflow_name}`} style={{ borderTop: "1px solid var(--border-subtle)" }}>
+                  <Td mono>{`${r.owner}/${r.name}`}</Td>
+                  <Td mono small>{r.workflow_name}</Td>
+                  <Td right mono><span style={{ color: factorColor, fontWeight: 500 }}>{r.factor.toFixed(2)}×</span></Td>
+                  <Td right mono>{r.n_observations}</Td>
+                  <Td right mono>{r.last_actual_sec !== undefined ? `${r.last_actual_sec.toFixed(1)}s` : "—"}</Td>
+                  <Td right mono>{r.last_predicted_sec !== undefined ? `${r.last_predicted_sec.toFixed(1)}s` : "—"}</Td>
+                  <Td right mono>{r.last_ratio !== undefined ? `${r.last_ratio.toFixed(2)}×` : "—"}</Td>
+                  <Td mono small>{new Date(r.updated_at).toISOString().slice(0, 16).replace("T", " ")}</Td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </Card>
   );
 }
 
@@ -389,12 +473,12 @@ const tableStyle: React.CSSProperties = {
   fontSize: "var(--fs-13)",
 };
 
-function Th({ children }: { children: React.ReactNode }) {
+function Th({ children, right }: { children: React.ReactNode; right?: boolean }) {
   return (
     <th
       className="caps"
       style={{
-        textAlign: "left",
+        textAlign: right ? "right" : "left",
         padding: "var(--s-2) var(--s-1)",
         color: "var(--text-tertiary)",
         fontWeight: 500,
@@ -409,10 +493,12 @@ function Td({
   children,
   mono,
   small,
+  right,
 }: {
   children: React.ReactNode;
   mono?: boolean;
   small?: boolean;
+  right?: boolean;
 }) {
   return (
     <td
@@ -420,6 +506,7 @@ function Td({
       style={{
         padding: "var(--s-2) var(--s-1)",
         fontSize: small ? "var(--fs-12)" : undefined,
+        textAlign: right ? "right" : undefined,
       }}
     >
       {children}

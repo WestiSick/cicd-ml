@@ -235,6 +235,17 @@ export const en: Record<TranslationKey, string> = {
   "admin.webhook.col.repo": "Repo",
   "admin.webhook.col.hmac": "HMAC",
   "admin.webhook.col.error": "Error",
+  "admin.calibrations": "Calibrations",
+  "admin.calibrations.hint": "Per-(repo, workflow) EMA-corrected multipliers applied on top of raw model predictions. Updated after each completed CI run. Factor 1.0× = model is unbiased; > 1.0× = model under-predicts; < 1.0× = model over-predicts. Skipped when n < 3 to avoid single-outlier bias.",
+  "admin.calibrations.empty": "No calibration data yet — coefficients appear after the first few workflow_run.completed events.",
+  "admin.calibrations.col.repo": "Repo",
+  "admin.calibrations.col.workflow": "Workflow",
+  "admin.calibrations.col.factor": "Factor",
+  "admin.calibrations.col.n": "N",
+  "admin.calibrations.col.last_actual": "Last actual",
+  "admin.calibrations.col.last_predicted": "Last predicted",
+  "admin.calibrations.col.last_ratio": "Last ratio",
+  "admin.calibrations.col.updated": "Updated",
 
   // admin settings
   "admin.settings": "Settings",

@@ -244,6 +244,17 @@ export const ru: Record<TranslationKey, string> = {
   "admin.webhook.col.repo": "Репозиторий",
   "admin.webhook.col.hmac": "HMAC",
   "admin.webhook.col.error": "Ошибка",
+  "admin.calibrations": "Калибровка",
+  "admin.calibrations.hint": "EMA-коэффициенты по (репо, workflow), применяемые поверх предсказания модели. Обновляются после каждого завершённого CI-run. Фактор 1.0× = модель без bias; > 1.0× = модель недооценивает; < 1.0× = переоценивает. Пропускается при n < 3 чтобы один выброс не сдвигал коэффициент.",
+  "admin.calibrations.empty": "Калибровка ещё не накоплена — коэффициенты появятся после нескольких событий workflow_run.completed.",
+  "admin.calibrations.col.repo": "Репо",
+  "admin.calibrations.col.workflow": "Workflow",
+  "admin.calibrations.col.factor": "Фактор",
+  "admin.calibrations.col.n": "N",
+  "admin.calibrations.col.last_actual": "Последний факт",
+  "admin.calibrations.col.last_predicted": "Последний прогноз",
+  "admin.calibrations.col.last_ratio": "Последнее ratio",
+  "admin.calibrations.col.updated": "Обновлено",
 
   // admin settings
   "admin.settings": "Настройки",

@@ -60,7 +60,9 @@ export function useDashboardQueue(): QueueCardData[] {
         head_sha:      typeof data.head_sha === "string" ? data.head_sha : prev.head_sha,
         status:        typeof data.status === "string" ? data.status : prev.status,
         conclusion:    typeof data.conclusion === "string" ? data.conclusion : prev.conclusion,
-        predicted_sec: typeof data.predicted_sec === "number" ? data.predicted_sec : prev.predicted_sec,
+        predicted_sec:      typeof data.predicted_sec      === "number" ? data.predicted_sec      : prev.predicted_sec,
+        predicted_raw_sec:  typeof data.predicted_raw_sec  === "number" ? data.predicted_raw_sec  : prev.predicted_raw_sec,
+        calibration_factor: typeof data.calibration_factor === "number" ? data.calibration_factor : prev.calibration_factor,
         actual_sec:    typeof data.actual_sec    === "number" ? data.actual_sec    : prev.actual_sec,
         delta_pct:     typeof data.delta_pct     === "number" ? data.delta_pct     : prev.delta_pct,
       };

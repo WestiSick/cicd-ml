@@ -28,6 +28,12 @@ export type QueueCardData = {
   status?: string;        // "queued" | "in_progress" | "running" | "completed" | etc.
   conclusion?: string;
   predicted_sec?: number;
+  // predicted_raw_sec: model output before per-(repo, workflow) calibration
+  // was applied. When equal to predicted_sec, no calibration was in effect.
+  // Used for tooltip hover so operator sees "model said X, calibration
+  // adjusted to Y" without cluttering the primary number.
+  predicted_raw_sec?: number;
+  calibration_factor?: number;
   actual_sec?: number;
   delta_pct?: number;
   startedAt?: string;     // ISO; client-side estimate for the live timer
@@ -83,7 +89,21 @@ export function QueueCard({ data, fresh }: { data: QueueCardData; fresh?: boolea
             {data.job_name && " · " + data.job_name}
           </div>
         </div>
-        <Metric label="predicted" value={data.predicted_sec !== undefined ? formatDuration(data.predicted_sec) : "—"} accent />
+        <Metric
+          label="predicted"
+          value={data.predicted_sec !== undefined ? formatDuration(data.predicted_sec) : "—"}
+          accent
+          // Tooltip: show raw vs calibrated when calibration was applied
+          // (factor != 1.0). Stays empty otherwise so cards without
+          // calibration data look unchanged from before.
+          tooltip={
+            data.predicted_raw_sec !== undefined &&
+            data.calibration_factor !== undefined &&
+            Math.abs(data.calibration_factor - 1.0) > 0.01
+              ? `model raw: ${formatDuration(data.predicted_raw_sec)} · calibration ${data.calibration_factor.toFixed(2)}× → ${formatDuration(data.predicted_sec ?? data.predicted_raw_sec)}`
+              : undefined
+          }
+        />
         <Metric
           label={isRunning ? "elapsed" : "actual"}
           value={
@@ -127,15 +147,19 @@ export function QueueCard({ data, fresh }: { data: QueueCardData; fresh?: boolea
   );
 }
 
-function Metric({ label, value, accent, colour }: { label: string; value: string; accent?: boolean; colour?: string }) {
+function Metric({ label, value, accent, colour, tooltip }: { label: string; value: string; accent?: boolean; colour?: string; tooltip?: string }) {
   return (
-    <div style={{ textAlign: "right" }}>
-      <div className="caps" style={{ fontSize: 10, color: "var(--text-tertiary)" }}>{label}</div>
+    <div style={{ textAlign: "right" }} title={tooltip}>
+      <div className="caps" style={{ fontSize: 10, color: "var(--text-tertiary)" }}>
+        {label}
+        {tooltip && <span style={{ color: "var(--accent)", marginLeft: 3 }}>•</span>}
+      </div>
       <div
         className="mono"
         style={{
           fontSize: "var(--fs-13)",
           color: colour ?? (accent ? "var(--accent)" : "var(--text-primary)"),
+          cursor: tooltip ? "help" : undefined,
         }}
       >
         {value}

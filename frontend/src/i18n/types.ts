@@ -240,6 +240,17 @@ export type TranslationKey =
   | "admin.webhook.col.repo"
   | "admin.webhook.col.hmac"
   | "admin.webhook.col.error"
+  | "admin.calibrations"
+  | "admin.calibrations.hint"
+  | "admin.calibrations.empty"
+  | "admin.calibrations.col.repo"
+  | "admin.calibrations.col.workflow"
+  | "admin.calibrations.col.factor"
+  | "admin.calibrations.col.n"
+  | "admin.calibrations.col.last_actual"
+  | "admin.calibrations.col.last_predicted"
+  | "admin.calibrations.col.last_ratio"
+  | "admin.calibrations.col.updated"
 
   // admin settings
   | "admin.settings"

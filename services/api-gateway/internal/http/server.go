@@ -125,6 +125,7 @@ func (s *Server) buildRouter() chi.Router {
 
 		// Admin / diagnostics.
 		r.Get("/admin/webhooks", s.listAdminWebhooks)
+		r.Get("/admin/calibrations", s.listAdminCalibrations)
 		r.Get("/admin/health", s.systemHealth)
 		r.Post("/admin/settings", s.updateAdminSettings)
 		r.Post("/admin/bg-jobs/pause", s.pauseBGRunner)

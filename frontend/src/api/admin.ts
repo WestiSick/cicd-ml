@@ -57,3 +57,26 @@ export async function pauseBGRunner(): Promise<{ paused: boolean }> {
 export async function resumeBGRunner(): Promise<{ paused: boolean }> {
   return api("/api/admin/bg-jobs/resume", { method: "POST" });
 }
+
+/* Per-(repo, workflow) calibration coefficients.
+ *
+ * factor:  multiplier applied to raw model prediction (1.0 = no bias).
+ * n_observations: count of completed runs that shaped this factor.
+ * last_*:  most recent observation for diagnostics. */
+export type CalibrationRow = {
+  owner: string;
+  name: string;
+  repo_id: number;
+  workflow_name: string;
+  factor: number;
+  n_observations: number;
+  last_actual_sec?: number;
+  last_predicted_sec?: number;
+  last_ratio?: number;
+  updated_at: string;
+};
+
+export async function listCalibrations(): Promise<CalibrationRow[]> {
+  const r = await api<{ calibrations: CalibrationRow[] }>("/api/admin/calibrations");
+  return r.calibrations || [];
+}

@@ -25,6 +25,11 @@ type QueueEvent = {
   conclusion?: string;
   head_sha?: string;
   predicted_sec?: number; // populated by api-gateway via ml-service on workflow_run.requested
+  // predicted_raw_sec / calibration_factor: optional, present when the
+  // backend applied per-(repo, workflow) EMA calibration on top of the
+  // raw model output. Used by QueueCard's tooltip to show the math.
+  predicted_raw_sec?: number;
+  calibration_factor?: number;
   actual_sec?: number;    // populated on workflow_run.completed (workflow-level updated_at - run_started_at)
   delta_pct?: number;     // signed Δ% (predicted - actual) / actual · 100 — only on completed with a remembered prediction
   model_algo?: string;
@@ -102,7 +107,9 @@ export function Dashboard() {
       status:        typeof data.status === "string" ? data.status : undefined,
       conclusion:    typeof data.conclusion === "string" ? data.conclusion : undefined,
       head_sha:      typeof data.head_sha === "string" ? data.head_sha : undefined,
-      predicted_sec: typeof data.predicted_sec === "number" ? data.predicted_sec : undefined,
+      predicted_sec:      typeof data.predicted_sec      === "number" ? data.predicted_sec      : undefined,
+      predicted_raw_sec:  typeof data.predicted_raw_sec  === "number" ? data.predicted_raw_sec  : undefined,
+      calibration_factor: typeof data.calibration_factor === "number" ? data.calibration_factor : undefined,
       actual_sec:    typeof data.actual_sec    === "number" ? data.actual_sec    : undefined,
       delta_pct:     typeof data.delta_pct     === "number" ? data.delta_pct     : undefined,
       model_algo:    typeof data.model_algo    === "string" ? data.model_algo    : undefined,

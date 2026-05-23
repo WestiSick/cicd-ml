@@ -112,6 +112,26 @@ func (s *Server) listAdminWebhooks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"events": events})
 }
 
+// GET /api/admin/calibrations
+//
+// Lists per-(repo, workflow) calibration coefficients with last-
+// observation diagnostics. Backs /admin → Calibrations in the UI so
+// the user can see which workflows have learned a bias and where the
+// model is still trusted at face value (factor close to 1.0).
+//
+// Read-only — calibration is mutated by the webhook .completed handler,
+// not by any UI action. A future iteration could expose a "reset
+// calibration" button if drift gets stuck in a bad state.
+func (s *Server) listAdminCalibrations(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.ListCalibrations(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list_calibrations_failed",
+			"Could not load calibration table", "Try refreshing the page.")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"calibrations": rows})
+}
+
 // GET /api/admin/health
 //
 // Aggregates per-component status so /admin → System health renders a
