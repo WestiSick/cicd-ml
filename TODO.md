@@ -14,6 +14,16 @@
 - **Если рецензент спросит:** «threat-model thesis-прототипа = «один пользователь на машине», поэтому auth не реализован; добавление одно-средство /api/login + middleware занимает день при необходимости».
 - **Размер при реализации:** S.
 
+### 3. Self-hosted runners интеграция — 🔜 отложено по решению автора
+- **Что есть:** scheduler/симулятор сравнивают стратегии FIFO/SJF/EDF/Custom на исторических данных (replay-режим), задачи в активной очереди только наблюдаются (нельзя пере-упорядочить уже отправленные GitHub-actions).
+- **Что нужно:**
+  - `docs/self-hosted-runners.md` с архитектурой: how the scheduler gates a self-hosted GitHub Actions runner via labels/admission, описание ограничений (нельзя preempt уже выполняющийся job), trade-offs vs simulation-only mode.
+  - POC: Redis-backed mock dispatcher + simulator harness, без реально зарегистрированного runner'а.
+  - Optionally: real runner-container, который polls GitHub и принимает job только когда scheduler greenlight'ит (через sidecar-gate на Redis).
+- **Почему не делал в этой итерации:** «skip for now» от автора 2026-05-23 — две другие фичи (push-recs heatmap + commit-content features) даюли больше ROI к защите.
+- **Если рецензент спросит:** «scheduler доказывает свою ценность на симуляторе (Chapter 4 сравнение стратегий); интеграция с реальным GitHub Actions runner'ом — линейное расширение, описанное в Chapter 5 «расширяемость»».
+- **Размер:** L (real runner) / M (POC + docs only).
+
 ### 2. Python тесты на модели + testcontainers integration — ⚠️ частично
 - **Что есть:** 3 теста (`test_features`, `test_healthz`, `test_optuna_search`).
 - **Что не хватает:**

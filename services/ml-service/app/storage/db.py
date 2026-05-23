@@ -14,6 +14,8 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
+from ..features.file_buckets import aggregate_commit_files, empty_bucket_columns
+
 _ENGINE: Engine | None = None
 
 
@@ -84,7 +86,66 @@ def load_jobs_df(dsn: str, repo_ids: list[int] | None = None, since: str | None 
 
     with connection(dsn) as conn:
         df = pd.read_sql(text(sql), conn, params=params)
+    return attach_commit_file_features(df, dsn)
+
+
+def attach_commit_file_features(df: pd.DataFrame, dsn: str) -> pd.DataFrame:
+    """Merge per-bucket commit-content features into a jobs dataframe.
+
+    Reusable so /predict's job_ids path and load_jobs_df produce a
+    schema-identical result — keeping these paths aligned is the
+    only way to ensure prediction uses the same feature set as
+    training without silent zero-fills.
+
+    Requires the input frame to contain a `head_sha` column; if
+    missing, the function still returns a frame with the new columns
+    populated with zeros so downstream transform() has a stable shape.
+    """
+    if df.empty or "head_sha" not in df.columns:
+        for col in empty_bucket_columns():
+            df[col] = 0 if df.empty else pd.Series(0, index=df.index)
+        return df
+
+    sha_series = df["head_sha"].dropna().unique().tolist()
+    cf_df = _load_commit_file_buckets(dsn, sha_series)
+    df = df.merge(cf_df, how="left", left_on="head_sha", right_on="sha")
+    if "sha" in df.columns:
+        df = df.drop(columns=["sha"])
+    # Fill missing — a SHA without commit_files data (collector hadn't
+    # fetched its diff yet, or it's a force-push that destroyed the
+    # commit) gets zeros, not NaN. The model treats "no signal" and
+    # "zero files of this type" identically.
+    for col in empty_bucket_columns():
+        if col not in df.columns:
+            df[col] = 0
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     return df
+
+
+def _load_commit_file_buckets(dsn: str, shas: list[str]) -> pd.DataFrame:
+    """Aggregate commit_files for the given SHAs into per-bucket feature
+    columns. Returns one row per SHA (or empty frame if no rows found).
+
+    Splits the SHA list into chunks because Postgres errors at >65k bind
+    parameters, and a one-year window across several active repos can
+    easily exceed that. 5000 SHAs per chunk leaves plenty of headroom.
+    """
+    if not shas:
+        return pd.DataFrame(columns=["sha", *empty_bucket_columns()])
+
+    sql = """
+        SELECT sha, filename, additions, deletions
+        FROM commit_files
+        WHERE sha = ANY(:shas)
+    """
+    chunk = 5000
+    frames: list[pd.DataFrame] = []
+    with connection(dsn) as conn:
+        for start in range(0, len(shas), chunk):
+            piece = shas[start : start + chunk]
+            frames.append(pd.read_sql(text(sql), conn, params={"shas": piece}))
+    raw = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    return aggregate_commit_files(raw)
 
 
 def fetch_active_model_row(dsn: str) -> dict[str, Any] | None:

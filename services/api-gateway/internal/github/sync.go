@@ -307,7 +307,7 @@ func (s *Syncer) processRun(ctx context.Context, repoID int64, owner, name strin
 			}
 			if cerr == nil {
 				committedAt := c.CommitDetail.Author.Date
-				_ = s.DB.UpsertCommit(ctx, store.UpsertCommitParams{
+				if err := s.DB.UpsertCommit(ctx, store.UpsertCommitParams{
 					SHA:          c.SHA,
 					RepoID:       repoID,
 					Author:       c.Author.Login,
@@ -316,7 +316,26 @@ func (s *Syncer) processRun(ctx context.Context, repoID int64, owner, name strin
 					Additions:    c.Stats.Additions,
 					Deletions:    c.Stats.Deletions,
 					CommittedAt:  zeroToNil(committedAt),
-				})
+				}); err == nil && len(c.Files) > 0 {
+					// Persist the per-file diff for commit-content features.
+					// GitHub caps the Files array at 300 per commit — anything
+					// larger comes back truncated. That's fine: super-large
+					// commits are outliers we don't model accurately anyway.
+					rows := make([]store.CommitFileParams, 0, len(c.Files))
+					for _, f := range c.Files {
+						rows = append(rows, store.CommitFileParams{
+							Filename:  f.Filename,
+							Status:    f.Status,
+							Additions: f.Additions,
+							Deletions: f.Deletions,
+						})
+					}
+					if fErr := s.DB.BulkInsertCommitFiles(ctx, c.SHA, rows); fErr != nil {
+						log.Warn().Err(fErr).Str("sha", c.SHA).
+							Int("files", len(rows)).
+							Msg("commit_files insert failed; non-fatal")
+					}
+				}
 			}
 		}
 	}

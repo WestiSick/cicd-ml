@@ -8,6 +8,8 @@ package store
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -52,6 +54,61 @@ func (d *DB) CommitExists(ctx context.Context, sha string) (bool, error) {
 	var exists bool
 	err := d.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM commits WHERE sha = $1)`, sha).Scan(&exists)
 	return exists, err
+}
+
+// CommitFileParams is one row for the per-file diff table. The ml-
+// service classifies filenames into backend/frontend/test/docs/config
+// buckets at feature-engineering time; we just store the raw paths.
+type CommitFileParams struct {
+	Filename  string
+	Status    string // 'added' | 'modified' | 'removed' | 'renamed' — verbatim from GitHub
+	Additions int
+	Deletions int
+}
+
+// BulkInsertCommitFiles is idempotent — a (sha, filename) already in the
+// table gets its counts refreshed. Returns the number of attempted rows
+// (some may have been duplicates and updated rather than inserted).
+//
+// We accept a slice rather than streaming so the call site can decide
+// whether to commit for an empty diff (no-op) without us doing an
+// otherwise-pointless transaction.
+func (d *DB) BulkInsertCommitFiles(ctx context.Context, sha string, files []CommitFileParams) error {
+	if len(files) == 0 {
+		return nil
+	}
+	// Build a multi-row VALUES clause: cheaper than N round-trips, and
+	// pgx handles the parameter packing. Cap at 1000 per batch — Postgres
+	// errors at 65535 parameters total (5 per row × 13000+); 1000 leaves
+	// plenty of room and a typical commit has well under that anyway.
+	const batchSize = 1000
+	for start := 0; start < len(files); start += batchSize {
+		end := start + batchSize
+		if end > len(files) {
+			end = len(files)
+		}
+		chunk := files[start:end]
+
+		args := make([]any, 0, len(chunk)*5)
+		var sb strings.Builder
+		sb.WriteString(`INSERT INTO commit_files (sha, filename, status, additions, deletions) VALUES `)
+		for i, f := range chunk {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			base := i*5 + 1
+			fmt.Fprintf(&sb, "($%d, $%d, $%d, $%d, $%d)", base, base+1, base+2, base+3, base+4)
+			args = append(args, sha, f.Filename, nilIfEmpty(f.Status), f.Additions, f.Deletions)
+		}
+		sb.WriteString(` ON CONFLICT (sha, filename) DO UPDATE SET
+			status    = EXCLUDED.status,
+			additions = EXCLUDED.additions,
+			deletions = EXCLUDED.deletions`)
+		if _, err := d.Pool.Exec(ctx, sb.String(), args...); err != nil {
+			return fmt.Errorf("bulk insert commit_files: %w", err)
+		}
+	}
+	return nil
 }
 
 // nullIfZero is a small helper to keep numeric columns NULL rather than

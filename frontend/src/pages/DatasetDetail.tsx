@@ -7,7 +7,13 @@ import { Card } from "@/components/Card";
 import { EmptyState } from "@/components/EmptyState";
 import { BarChart } from "@/components/BarChart";
 import { StatusChip } from "@/components/StatusChip";
-import { datasetExportCSVURL, fetchDatasetDetail, fetchFeaturePreview } from "@/api/repos";
+import { PushHeatmap } from "@/components/PushHeatmap";
+import {
+  datasetExportCSVURL,
+  fetchDatasetDetail,
+  fetchFeaturePreview,
+  fetchPushRecommendations,
+} from "@/api/repos";
 import { useT } from "@/i18n";
 import { formatDuration } from "@/lib/format";
 
@@ -175,9 +181,62 @@ export function DatasetDetail() {
       </div>
 
       <div style={{ marginTop: "var(--s-3)" }}>
+        <PushRecommendationsCard repoID={repoID} />
+      </div>
+
+      <div style={{ marginTop: "var(--s-3)" }}>
         <FeaturePreview repoID={repoID} />
       </div>
     </>
+  );
+}
+
+/* PushRecommendationsCard — wraps PushHeatmap with title, hint, and
+ * loading/empty states. Uses the browser's IANA timezone so the
+ * thesis author sees Moscow office hours (or whatever local zone) by
+ * default — falls back to UTC when Intl is unavailable. */
+function PushRecommendationsCard({ repoID }: { repoID: number }) {
+  const t = useT();
+  const tz = (() => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    } catch {
+      return "UTC";
+    }
+  })();
+
+  const q = useQuery({
+    queryKey: ["pushrec", repoID, tz],
+    queryFn: () => fetchPushRecommendations(repoID, { days: 90, tz }),
+    refetchInterval: 60_000,
+  });
+
+  return (
+    <Card>
+      <SectionTitle>{t("datasets.pushrec.title")}</SectionTitle>
+      <p
+        style={{
+          color: "var(--text-tertiary)",
+          fontSize: "var(--fs-12)",
+          margin: "0 0 var(--s-3) 0",
+          maxWidth: 760,
+          lineHeight: 1.5,
+        }}
+      >
+        {t("datasets.pushrec.hint")}
+      </p>
+      {q.isLoading && (
+        <p style={{ color: "var(--text-secondary)", fontSize: "var(--fs-13)" }}>
+          {t("common.loading")}
+        </p>
+      )}
+      {q.data && q.data.overall.sample_count === 0 && (
+        <p style={{ color: "var(--text-tertiary)", fontSize: "var(--fs-13)", margin: 0 }}>
+          {t("datasets.pushrec.empty")}
+        </p>
+      )}
+      {q.data && q.data.overall.sample_count > 0 && <PushHeatmap data={q.data} />}
+    </Card>
   );
 }
 

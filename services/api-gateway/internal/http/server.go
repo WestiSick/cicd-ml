@@ -166,6 +166,7 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/datasets/{id}", s.datasetDetail)
 		r.Get("/datasets/{id}/features", s.datasetFeaturePreview)
 		r.Get("/datasets/{id}/export.csv", s.exportDatasetCSV)
+		r.Get("/datasets/{id}/push-recommendations", s.datasetPushRecommendations)
 	})
 
 	r.Post("/webhooks/github", s.handleGithubWebhook)

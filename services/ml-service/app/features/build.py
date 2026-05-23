@@ -4,18 +4,20 @@ This module is the single source of truth for what we feed the models.
 The dissertation's Chapter 3 references exactly this file's feature list —
 keep the docstrings honest if the implementation changes.
 
-Feature groups (`FEATURE_VERSION = 1`):
+Feature groups (`FEATURE_VERSION = 2`):
 
   - Time:        hour_of_day, day_of_week, is_weekend
   - Categorical: workflow_name, job_name, head_branch, event, repo, runner
                  (one-hot encoded with vocab pinned at fit time)
   - Numeric:     steps_count, log_repo_avg_30d
   - Branch class: branch_is_main, branch_is_release, branch_is_feature
-
-What we don't have yet (deliberate cut for the baseline):
-  - Commit diff features (no `commits` data collected yet)
-  - Rolling per-job-name historical stats (next iteration)
-  - Author historical stats (needs a longer time window than we have)
+  - Commit diff (aggregate): log_commit_files_changed, log_commit_additions,
+                             log_commit_deletions
+  - Commit content (v2): per-bucket file counts (backend / frontend / test /
+                         docs / config / other), per-bucket LOC, and the
+                         flags `commit_is_docs_only` and `commit_has_tests`
+  - Rolling per-(repo, job_name): log_jobname_median_7d/30d, jobname_runs_30d
+  - Author historical: log_author_p50_30d, log_author_p90_30d, author_commits_30d
 
 Target: log(duration_sec + 1). Log-transform stabilises variance — CI
 durations are heavily right-skewed (most under 1 min, long tail to hours).
@@ -29,7 +31,14 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-FEATURE_VERSION = 1
+from .file_buckets import BUCKETS as _COMMIT_FILE_BUCKETS
+
+# Bumped from 1 → 2 with the addition of commit-content features (per-file
+# diff classification: backend/frontend/test/docs/config buckets + LOC +
+# is_docs_only/has_tests flags). Old models stay loadable because
+# `feature_version` is stamped per-model — the loader uses the stored
+# schema rather than the current module-level constant.
+FEATURE_VERSION = 2
 
 # Top-K trick: rather than one-hot-encoding hundreds of unique workflow_names
 # (some appear once), we keep the K most frequent values per column and
@@ -116,12 +125,22 @@ def fit_schema(df: pd.DataFrame) -> FeatureSchema:
         "log_author_p50_30d",
         "log_author_p90_30d",
         "author_commits_30d",
-        # Commit diff features — populated by the collector for SHAs it
-        # has fetched details for; missing rows fall back to 0 via NaN
-        # → 0 coercion in transform.
+        # Commit diff features — aggregate counts populated by the
+        # collector. Missing rows fall back to 0 via NaN → 0 coercion
+        # in transform().
         "log_commit_files_changed",
         "log_commit_additions",
         "log_commit_deletions",
+        # Commit-content features (v2). Per-bucket file counts and LOC
+        # let the model distinguish "README-only push" (docs_files=1,
+        # is_docs_only=1 → fast pipeline) from "rewrote half the
+        # backend" (backend_files=42, backend_loc=2400 → long pipeline).
+        # Log-transformed only for LOC because file counts are already
+        # bounded (GitHub caps Files at 300/commit).
+        *[f"commit_{b}_files" for b in _COMMIT_FILE_BUCKETS],
+        *[f"log_commit_{b}_loc" for b in _COMMIT_FILE_BUCKETS],
+        "commit_is_docs_only",
+        "commit_has_tests",
         "hour_of_day",
         "day_of_week",
         "is_weekend",
@@ -280,6 +299,30 @@ def _enrich(df: pd.DataFrame) -> pd.DataFrame:
             )
         else:
             out[dst] = 0.0
+
+    # Per-bucket commit-content features. File counts pass through as-is
+    # (already bounded); LOC values are log-transformed for the same
+    # right-tail reason as the aggregate `additions`/`deletions` above.
+    # Missing columns (no commit_files data for this SHA) fall back to 0.
+    for bucket in _COMMIT_FILE_BUCKETS:
+        files_col = f"commit_{bucket}_files"
+        loc_col   = f"commit_{bucket}_loc"
+        log_loc   = f"log_commit_{bucket}_loc"
+        if files_col in out.columns:
+            out[files_col] = pd.to_numeric(out[files_col], errors="coerce").fillna(0).clip(lower=0)
+        else:
+            out[files_col] = 0
+        if loc_col in out.columns:
+            out[log_loc] = np.log1p(
+                pd.to_numeric(out[loc_col], errors="coerce").fillna(0).clip(lower=0).astype(float)
+            )
+        else:
+            out[log_loc] = 0.0
+    for flag in ("commit_is_docs_only", "commit_has_tests"):
+        if flag in out.columns:
+            out[flag] = pd.to_numeric(out[flag], errors="coerce").fillna(0).clip(lower=0, upper=1).astype(int)
+        else:
+            out[flag] = 0
 
     return out
 

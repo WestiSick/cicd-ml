@@ -155,6 +155,52 @@ export async function fetchTimeline(opts: { days?: number; repoIDs?: number[] } 
   return api<TimelineResponse>(`/api/datasets/timeline${tail ? "?" + tail : ""}`);
 }
 
+// /api/datasets/{id}/push-recommendations — when-to-push heatmap.
+//
+// Cells are sparse: only (hour, dow) buckets that actually have data
+// are returned, so the frontend has to build the dense 24×7 grid
+// itself. Deltas are signed percent vs the repo's overall mean —
+// negative is good (faster than average).
+export type PushRecCell = {
+  hour: number;                 // 0..23
+  dow: number;                  // 0..6, Mon=0
+  sample_count: number;
+  mean_wait_sec: number;
+  mean_duration_sec: number;
+  mean_total_sec: number;
+  wait_delta_pct: number;
+  duration_delta_pct: number;
+  total_delta_pct: number;
+};
+
+export type PushRecommendations = {
+  repo_id: number;
+  days: number;
+  tz: string;
+  window_start: string;
+  window_end: string;
+  overall: {
+    sample_count: number;
+    mean_wait_sec: number;
+    mean_duration_sec: number;
+    mean_total_sec: number;
+  };
+  cells: PushRecCell[];
+  best:  { hour: number; dow: number; total_delta_pct: number } | null;
+  worst: { hour: number; dow: number; total_delta_pct: number } | null;
+};
+
+export async function fetchPushRecommendations(
+  id: number,
+  opts: { days?: number; tz?: string } = {},
+): Promise<PushRecommendations> {
+  const qs = new URLSearchParams();
+  if (opts.days) qs.set("days", String(opts.days));
+  if (opts.tz)   qs.set("tz",   opts.tz);
+  const tail = qs.toString();
+  return api(`/api/datasets/${id}/push-recommendations${tail ? "?" + tail : ""}`);
+}
+
 // /api/datasets/{id}/features — for the feature-matrix preview panel.
 export type FeaturePreviewRow = {
   job_id: number;

@@ -168,7 +168,15 @@ def _load_model_for_active(models_dir: Path, active: dict[str, Any]) -> MLBaseMo
 def _load_jobs_by_ids(dsn: str, ids: list[int]) -> pd.DataFrame:
     """Mirrors load_jobs_df but filters by job_id — needed for the webhook
     path where we have specific jobs and don't want to scan the full
-    dataset."""
+    dataset.
+
+    Schema parity with load_jobs_df is important: the active model was
+    trained against load_jobs_df's columns; if we drop a column here
+    the transform() at predict time fills it with zeros silently, which
+    quietly degrades predictions. Hence the same SELECT list (incl.
+    head_sha + commit aggregate cols) and the same attach_commit_file_
+    features post-process.
+    """
     sql = """
         SELECT
             j.id              AS job_id,
@@ -182,16 +190,22 @@ def _load_jobs_by_ids(dsn: str, ids: list[int]) -> pd.DataFrame:
             w.id              AS run_id,
             w.workflow_name   AS workflow_name,
             w.head_branch     AS head_branch,
+            w.head_sha        AS head_sha,
             w.event           AS event,
             w.actor           AS actor,
             w.created_at      AS run_created_at,
             r.id              AS repo_id,
             r.owner           AS repo_owner,
-            r.name            AS repo_name
+            r.name            AS repo_name,
+            c.files_changed   AS commit_files_changed,
+            c.additions       AS commit_additions,
+            c.deletions       AS commit_deletions
         FROM jobs j
         JOIN workflow_runs w ON j.run_id = w.id
         JOIN repos r         ON w.repo_id = r.id
+        LEFT JOIN commits c  ON w.head_sha = c.sha
         WHERE j.id = ANY(:ids)
     """
     with db.connection(dsn) as conn:
-        return pd.read_sql(text(sql), conn, params={"ids": ids})
+        df = pd.read_sql(text(sql), conn, params={"ids": ids})
+    return db.attach_commit_file_features(df, dsn)

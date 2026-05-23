@@ -13,7 +13,13 @@ go.work.sum
 
 # Air hot-reload build artifacts (per-service tmp/ contains the rebuilt binary
 # and its swap files — not source, regenerated on every file change).
+# Air also writes per-binary dirs (tmp-collector/, tmp-simulator/) when the
+# Dockerfile builds multiple commands from one module.
 services/**/tmp/
+services/**/tmp-*/
+
+# Vite / tsc incremental build cache
+frontend/tsconfig.tsbuildinfo
 
 # Build-time copy — canonical lives in /db/migrations
 services/api-gateway/internal/store/migrations/
