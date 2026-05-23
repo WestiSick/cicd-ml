@@ -45,7 +45,23 @@ def load_jobs_df(dsn: str, repo_ids: list[int] | None = None, since: str | None 
     # LEFT JOIN commits: collector only fills `commits` for SHAs it
     # actually fetched, so NULL is normal for older runs predating the
     # commit-collection rollout. Feature engineering treats NULLs as 0.
+    #
+    # wr_lag CTE: hours_since_last_run per workflow_run, partitioned by
+    # repo. Captures docker-layer-cache state for self-hosted runners
+    # (the dominant predictor of bimodal warm/cold deploy duration that
+    # commit-content features alone cannot explain — see thesis Chapter 4
+    # error-analysis section). First run in a partition gets NULL from
+    # LAG and is COALESCEd to 999 hours = treated as cold start.
     sql = """
+        WITH wr_lag AS (
+            SELECT id,
+                   EXTRACT(EPOCH FROM (
+                     created_at - LAG(created_at) OVER (
+                       PARTITION BY repo_id ORDER BY created_at, id
+                     )
+                   )) / 3600.0 AS hours_since_last_run
+            FROM workflow_runs
+        )
         SELECT
             j.id              AS job_id,
             j.name            AS job_name,
@@ -67,9 +83,11 @@ def load_jobs_df(dsn: str, repo_ids: list[int] | None = None, since: str | None 
             r.name            AS repo_name,
             c.files_changed   AS commit_files_changed,
             c.additions       AS commit_additions,
-            c.deletions       AS commit_deletions
+            c.deletions       AS commit_deletions,
+            COALESCE(wl.hours_since_last_run, 999.0) AS hours_since_last_run
         FROM jobs j
         JOIN workflow_runs w ON j.run_id = w.id
+        JOIN wr_lag wl       ON wl.id = w.id
         JOIN repos r         ON w.repo_id = r.id
         LEFT JOIN commits c  ON w.head_sha = c.sha
         WHERE j.duration_sec IS NOT NULL
@@ -120,6 +138,39 @@ def attach_commit_file_features(df: pd.DataFrame, dsn: str) -> pd.DataFrame:
             df[col] = 0
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     return df
+
+
+def lookup_hours_since_last_run(dsn: str, owner: str, name: str) -> float:
+    """How many hours since the most recent workflow_run for this repo.
+
+    Used by predict_from_payload: at webhook time we don't yet have a
+    workflow_runs row for the incoming push, so we can't use the LAG()
+    in load_jobs_df. Instead we look up the previous run and return the
+    delta to NOW — which is exactly what LAG would produce once this
+    push lands in the table.
+
+    Returns 999.0 when the repo has no prior runs (cold start). Also
+    returns 999.0 on any error — the model treats large values as
+    "cold cache" which is the safer default.
+    """
+    if not owner or not name:
+        return 999.0
+    sql = """
+        SELECT EXTRACT(EPOCH FROM (now() - max(w.created_at))) / 3600.0
+        FROM workflow_runs w
+        JOIN repos r ON w.repo_id = r.id
+        WHERE r.owner = :owner AND r.name = :name
+    """
+    try:
+        with connection(dsn) as conn:
+            row = conn.execute(text(sql), {"owner": owner, "name": name}).first()
+        if row is None or row[0] is None:
+            return 999.0
+        v = float(row[0])
+        # Guard against negative (clock skew) — clamp to 0.
+        return max(0.0, v)
+    except Exception:
+        return 999.0
 
 
 def _load_commit_file_buckets(dsn: str, shas: list[str]) -> pd.DataFrame:

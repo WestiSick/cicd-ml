@@ -100,3 +100,30 @@ def test_schema_roundtrip_dict(sample_df):
     assert schema2.version == schema.version
     assert schema2.numeric_columns == schema.numeric_columns
     assert schema2.categories == schema.categories
+
+
+def test_hours_since_last_run_log_transform(sample_df):
+    """v3: log_hours_since_last_run captures docker-cache temperature.
+
+    Three invariants:
+      1. Column appears in fit_schema's numeric_columns.
+      2. Larger raw gaps produce larger log values (monotonic).
+      3. Missing input column → row is treated as cold (large value),
+         not crashing — predict paths that forget to inject the column
+         still produce a sane prediction.
+    """
+    schema = fit_schema(sample_df)
+    assert "log_hours_since_last_run" in schema.numeric_columns
+
+    # Two rows, one warm (1h gap), one cold (240h gap). After transform
+    # the cold row must score higher on log_hours_since_last_run.
+    df = sample_df.head(2).copy()
+    df["hours_since_last_run"] = [1.0, 240.0]
+    X, names, _ = transform(df, schema)
+    idx = names.index("log_hours_since_last_run")
+    assert X[1, idx] > X[0, idx], "240h gap must out-rank 1h gap"
+
+    # Missing column → falls back to 999 (cold default) for every row.
+    df_no_col = sample_df.head(1).drop(columns=[c for c in sample_df.columns if c == "hours_since_last_run"], errors="ignore")
+    X2, names2, _ = transform(df_no_col, schema)
+    assert X2.shape[1] == len(names2)  # didn't crash

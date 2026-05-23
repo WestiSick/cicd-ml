@@ -4,7 +4,7 @@ This module is the single source of truth for what we feed the models.
 The dissertation's Chapter 3 references exactly this file's feature list —
 keep the docstrings honest if the implementation changes.
 
-Feature groups (`FEATURE_VERSION = 2`):
+Feature groups (`FEATURE_VERSION = 3`):
 
   - Time:        hour_of_day, day_of_week, is_weekend
   - Categorical: workflow_name, job_name, head_branch, event, repo, runner
@@ -33,12 +33,17 @@ import pandas as pd
 
 from .file_buckets import BUCKETS as _COMMIT_FILE_BUCKETS
 
-# Bumped from 1 → 2 with the addition of commit-content features (per-file
-# diff classification: backend/frontend/test/docs/config buckets + LOC +
-# is_docs_only/has_tests flags). Old models stay loadable because
-# `feature_version` is stamped per-model — the loader uses the stored
-# schema rather than the current module-level constant.
-FEATURE_VERSION = 2
+# v1 → v2: per-file commit-content features (backend/frontend/test/docs/
+#   config bucket counts + LOC + is_docs_only/has_tests flags).
+# v2 → v3: log_hours_since_last_run — gap between this workflow_run and
+#   the previous one in the same repo. Captures docker-layer-cache state
+#   on self-hosted runners, which dominates the bimodal warm/cold deploy
+#   duration that commit-content features alone cannot explain (e.g.
+#   thesis Chapter 4 santehlavka case: 30 short 22s deploys + 22 long
+#   200s deploys with near-identical commit profiles).
+# Old models stay loadable because `feature_version` is stamped per-model
+# — the loader uses the stored schema, not this module-level constant.
+FEATURE_VERSION = 3
 
 # Top-K trick: rather than one-hot-encoding hundreds of unique workflow_names
 # (some appear once), we keep the K most frequent values per column and
@@ -141,6 +146,12 @@ def fit_schema(df: pd.DataFrame) -> FeatureSchema:
         *[f"log_commit_{b}_loc" for b in _COMMIT_FILE_BUCKETS],
         "commit_is_docs_only",
         "commit_has_tests",
+        # v3: cache-temperature proxy. Long gaps since the last run in
+        # this repo strongly correlate with cold docker-layer cache on
+        # self-hosted runners → long deploy duration. log1p compresses
+        # the heavy right tail (gaps of weeks happen but shouldn't
+        # dominate the feature scale).
+        "log_hours_since_last_run",
         "hour_of_day",
         "day_of_week",
         "is_weekend",
@@ -323,6 +334,19 @@ def _enrich(df: pd.DataFrame) -> pd.DataFrame:
             out[flag] = pd.to_numeric(out[flag], errors="coerce").fillna(0).clip(lower=0, upper=1).astype(int)
         else:
             out[flag] = 0
+
+    # Cache-temperature feature. db.load_jobs_df / lookup_hours_since_
+    # last_run produce raw hours; we log-transform here so the model
+    # sees diminishing returns at the tail (a 240-hour gap is not
+    # 10× as cold as a 24-hour gap in practice — cache wholly evicts
+    # within ~24h on most CI runners). Missing column → treat as cold
+    # (999h) so behaviour stays safe for predict paths that forgot to
+    # supply the column.
+    if "hours_since_last_run" in out.columns:
+        raw = pd.to_numeric(out["hours_since_last_run"], errors="coerce").fillna(999.0).clip(lower=0)
+    else:
+        raw = pd.Series(999.0, index=out.index)
+    out["log_hours_since_last_run"] = np.log1p(raw.astype(float))
 
     return out
 

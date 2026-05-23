@@ -141,17 +141,27 @@ async def predict_from_payload(body: PredictFromPayloadBody) -> dict[str, Any]:
     # workflow_run.requested, which is when GitHub would normally start
     # scheduling — close enough for our hour_of_day / day_of_week features.
     now = pd.Timestamp.utcnow()
+
+    # hours_since_last_run — cache-temperature signal. At webhook time
+    # the new workflow_run isn't yet in the DB, so we look up the most
+    # recent run for this repo and measure the delta to now(). Once the
+    # collector ingests this run, load_jobs_df will compute it the same
+    # way via the LAG() CTE — identical semantics, just one path is
+    # batch-SQL and the other is a single-row helper.
+    hours_since = db.lookup_hours_since_last_run(s.postgres_dsn, body.repo_owner, body.repo_name)
+
     df = pd.DataFrame([{
-        "repo_owner":     body.repo_owner,
-        "repo_name":      body.repo_name,
-        "workflow_name":  body.workflow_name,
-        "head_branch":    body.head_branch,
-        "head_sha":       body.head_sha,
-        "event":          body.event,
-        "job_name":       body.job_name,
-        "runner_name":    body.runner_name,
-        "steps_count":    body.steps_count if body.steps_count is not None else 0,
-        "run_created_at": now,
+        "repo_owner":            body.repo_owner,
+        "repo_name":             body.repo_name,
+        "workflow_name":         body.workflow_name,
+        "head_branch":           body.head_branch,
+        "head_sha":              body.head_sha,
+        "event":                 body.event,
+        "job_name":              body.job_name,
+        "runner_name":           body.runner_name,
+        "steps_count":           body.steps_count if body.steps_count is not None else 0,
+        "run_created_at":        now,
+        "hours_since_last_run":  hours_since,
     }])
 
     # Attach commit-content features when we have a SHA AND it's already
@@ -199,6 +209,15 @@ def _load_jobs_by_ids(dsn: str, ids: list[int]) -> pd.DataFrame:
     features post-process.
     """
     sql = """
+        WITH wr_lag AS (
+            SELECT id,
+                   EXTRACT(EPOCH FROM (
+                     created_at - LAG(created_at) OVER (
+                       PARTITION BY repo_id ORDER BY created_at, id
+                     )
+                   )) / 3600.0 AS hours_since_last_run
+            FROM workflow_runs
+        )
         SELECT
             j.id              AS job_id,
             j.name            AS job_name,
@@ -220,9 +239,11 @@ def _load_jobs_by_ids(dsn: str, ids: list[int]) -> pd.DataFrame:
             r.name            AS repo_name,
             c.files_changed   AS commit_files_changed,
             c.additions       AS commit_additions,
-            c.deletions       AS commit_deletions
+            c.deletions       AS commit_deletions,
+            COALESCE(wl.hours_since_last_run, 999.0) AS hours_since_last_run
         FROM jobs j
         JOIN workflow_runs w ON j.run_id = w.id
+        JOIN wr_lag wl       ON wl.id = w.id
         JOIN repos r         ON w.repo_id = r.id
         LEFT JOIN commits c  ON w.head_sha = c.sha
         WHERE j.id = ANY(:ids)
