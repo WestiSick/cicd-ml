@@ -25,8 +25,13 @@ EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
 # ---- prod ----
+# All wheels we need (torch-cpu, xgboost, lightgbm, scikit-learn,
+# lightgbm) are prebuilt on manylinux2014, so the base image doesn't
+# install a compiler — and prod has nothing to purge. Earlier versions
+# of this file ran `apt-get purge build-essential` here, which broke
+# the build (exit 100 — package was never installed). Don't re-add
+# unless you also reintroduce build-essential in `base`.
 FROM base AS prod
 COPY . .
-RUN apt-get purge -y build-essential && apt-get autoremove -y
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
