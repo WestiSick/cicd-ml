@@ -116,6 +116,13 @@ export function WebhookBadge({ repoID, status, webhookURL, errorMessage }: Props
         >
           ✕
         </button>
+      ) : status === "failed_no_access" ? (
+        // Hide the Install button when we *know* the PAT can't install
+        // a hook on this repo (403/404 from GitHub — typical for
+        // upstream OSS like gin-gonic/gin). Clicking it again would
+        // just produce the same failure, so a permanent "no" without
+        // a button is honest.
+        null
       ) : (
         <button
           onClick={() => install.mutate()}

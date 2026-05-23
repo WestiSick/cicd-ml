@@ -155,7 +155,19 @@ export function Simulator() {
       {results && results.length > 0 && (
         <>
           <h2 style={sectionTitleStyle}>{t("sim.results")}</h2>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "var(--s-3)", marginBottom: "var(--s-6)" }}>
+          {/* auto-fit + minmax(260px) — 4 wide on big screens, 2×2 on
+              ~1100px, 1 column on phones. Earlier `repeat(4, 1fr)`
+              forced four ChartCard's (each with a fixed-width BarChart)
+              onto one row, and the rightmost SLA chart was clipped at
+              common viewport widths. */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+              gap: "var(--s-3)",
+              marginBottom: "var(--s-6)",
+            }}
+          >
             <ChartCard title={t("sim.metric.makespan")} data={charts!.makespan} />
             <ChartCard title={t("sim.metric.wait_mean")} data={charts!.waitMean} />
             <ChartCard title={t("sim.metric.wait_p95")} data={charts!.waitP95} />
@@ -242,9 +254,13 @@ export function Simulator() {
 
 function ChartCard({ title, data }: { title: string; data: { label: string; value: number }[] }) {
   return (
-    <Card>
+    // overflow:hidden — defensive: even if BarChart's fixed-width SVG
+    // ends up wider than the grid cell (auto-fit minmax(260, 1fr)),
+    // it clips inside the card instead of pushing the whole grid
+    // past the page width.
+    <Card style={{ overflow: "hidden" }}>
       <div className="caps" style={{ color: "var(--text-tertiary)", marginBottom: "var(--s-2)" }}>{title}</div>
-      <BarChart data={data} format={(v) => v.toFixed(0)} />
+      <BarChart data={data} width={260} format={(v) => v.toFixed(0)} />
     </Card>
   );
 }
