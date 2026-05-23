@@ -26,6 +26,11 @@ export type TranslationKey =
   | "common.start_sync"
   | "common.sync"
   | "common.pause_queue"
+  | "common.pause"
+  | "common.resume"
+  | "common.resync"
+  | "common.remove"
+  | "common.download"
   | "common.run"
   | "common.export"
   | "common.train"
@@ -98,9 +103,25 @@ export type TranslationKey =
   | "datasets.card.runs"
   | "datasets.card.jobs"
   | "datasets.card.added"
+  | "datasets.card.coverage"
+  | "datasets.card.last_synced"
   | "datasets.toast.added"
   | "datasets.toast.added_desc"
   | "datasets.toast.sync_queued"
+  | "datasets.toast.paused"
+  | "datasets.toast.resumed"
+  | "datasets.toast.resync_queued"
+  | "datasets.toast.removed"
+  | "datasets.toast.removed_desc"
+  | "datasets.delete.title"
+  | "datasets.delete.message"
+  | "datasets.delete.confirm"
+  | "datasets.detail.duration_dist"
+  | "datasets.detail.top_workflows"
+  | "datasets.detail.top_jobs"
+  | "datasets.detail.branches"
+  | "datasets.detail.conclusions"
+  | "datasets.detail.back"
 
   // experiments
   | "exp.title"
@@ -175,7 +196,49 @@ export type TranslationKey =
   | "admin.webhook.col.event"
   | "admin.webhook.col.repo"
   | "admin.webhook.col.hmac"
-  | "admin.webhook.col.error";
+  | "admin.webhook.col.error"
+
+  // admin settings
+  | "admin.settings"
+  | "admin.settings.strategy"
+  | "admin.settings.strategy.hint"
+  | "admin.settings.weights"
+  | "admin.settings.weights.hint"
+  | "admin.settings.weights.short_job"
+  | "admin.settings.weights.deadline"
+  | "admin.settings.weights.branch"
+  | "admin.settings.token"
+  | "admin.settings.token.hint"
+  | "admin.settings.token.set"
+  | "admin.settings.token.placeholder"
+  | "admin.settings.save"
+  | "admin.settings.toast.saved"
+
+  // admin activity
+  | "admin.activity"
+  | "admin.activity.empty"
+  | "admin.activity.col.time"
+  | "admin.activity.col.actor"
+  | "admin.activity.col.action"
+  | "admin.activity.col.target"
+  | "admin.activity.col.result"
+
+  // experiments — delete/download
+  | "exp.toast.deleted"
+  | "exp.toast.cannot_delete_active"
+  | "exp.delete.title"
+  | "exp.delete.message"
+  | "exp.delete.confirm"
+  | "exp.col.actions"
+  | "exp.action.download"
+  | "exp.action.delete"
+
+  // training detail — cancel/logs/residuals
+  | "train_detail.cancel"
+  | "train_detail.cancel.confirm"
+  | "train_detail.toast.cancelled"
+  | "train_detail.logs"
+  | "train_detail.residuals";
 
 export const TRANSLATION_KEYS: ReadonlyArray<TranslationKey> = [
   // (Type-checked by the en.ts/ru.ts implementation files — listed here

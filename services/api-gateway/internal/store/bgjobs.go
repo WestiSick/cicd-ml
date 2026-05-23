@@ -50,6 +50,28 @@ const (
 	JobStatusCancelled = "cancelled"
 )
 
+// CancelBGJob marks a bg_job as cancelled. Only queued/running jobs are
+// eligible — a done/failed job can't be retroactively cancelled. Returns
+// (cancelled bool, error): false means the row exists but was in a
+// terminal state, true means we flipped it.
+//
+// Workers cooperatively check the cancel flag on each progress callback
+// (see internal/bgjobs/worker.go) and bail out cleanly with a partial
+// "cancelled" status.
+func (d *DB) CancelBGJob(ctx context.Context, id int64) (bool, error) {
+	tag, err := d.Pool.Exec(ctx, `
+		UPDATE bg_jobs
+		SET status = 'cancelled',
+		    finished_at = now(),
+		    message = COALESCE(message, '') || ' [cancelled by user]'
+		WHERE id = $1 AND status IN ('queued','running')
+	`, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // EnqueueBGJob inserts a row in `queued` state. The returned ID is what
 // the worker uses to claim and update the row.
 func (d *DB) EnqueueBGJob(ctx context.Context, kind string, payload any) (BGJob, error) {

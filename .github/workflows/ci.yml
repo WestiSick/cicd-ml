@@ -1,0 +1,90 @@
+name: ci
+
+# Lint + unit-test gate on every push/PR. We deliberately don't run the
+# integration tests here (they need Postgres + Redis containers and a
+# minute or two to spin up). The local `make test` covers that side; CI
+# stays focused on catching the cheap mistakes early.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+
+  lint-go:
+    name: lint go (api-gateway)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+          cache-dependency-path: services/api-gateway/go.sum
+      - name: go build
+        working-directory: services/api-gateway
+        run: go build ./...
+      - name: go vet
+        working-directory: services/api-gateway
+        run: go vet ./...
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.59
+          working-directory: services/api-gateway
+          # We accept some warnings — repo is a thesis project, not enterprise SaaS.
+          args: --timeout=5m
+
+  test-go:
+    name: test go (api-gateway)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+          cache-dependency-path: services/api-gateway/go.sum
+      - name: go test (race detector on)
+        working-directory: services/api-gateway
+        run: go test -race -count=1 ./...
+
+  lint-py:
+    name: lint python (ml-service)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/ml-service/requirements.txt
+      - name: install
+        working-directory: services/ml-service
+        run: pip install ruff
+      - name: ruff
+        working-directory: services/ml-service
+        run: ruff check .
+
+  build-frontend:
+    name: build frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: install
+        working-directory: frontend
+        run: npm ci
+      - name: typecheck
+        working-directory: frontend
+        # tsc is part of the vite build, but tsc --noEmit catches type errors
+        # without invoking the bundler — faster and cleaner failure messages.
+        run: npx tsc --noEmit
+      - name: build
+        working-directory: frontend
+        run: npm run build

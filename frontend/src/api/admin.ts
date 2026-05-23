@@ -31,3 +31,19 @@ export async function listWebhookEvents(limit = 50): Promise<WebhookEvent[]> {
 export async function fetchSystemHealth(): Promise<SystemHealth> {
   return await api<SystemHealth>("/api/admin/health");
 }
+
+export type ActivityEntry = {
+  id: number;
+  occurred_at: string;
+  actor: string;
+  action: string;
+  target?: string;
+  message?: string;
+  success: boolean;
+  details?: Record<string, unknown>;
+};
+
+export async function fetchActivity(limit = 100): Promise<ActivityEntry[]> {
+  const r = await api<{ entries: ActivityEntry[] }>(`/api/activity?limit=${limit}`);
+  return r.entries;
+}

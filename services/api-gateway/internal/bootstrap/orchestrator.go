@@ -35,10 +35,10 @@ import (
 
 // SetupRequest is the payload sent from the /setup page.
 type SetupRequest struct {
-	GithubToken string   `json:"github_token,omitempty"`
-	Repos       []string `json:"repos"`       // owner/name slugs
-	HistoryMonths int    `json:"history_months"`
-	Models      []string `json:"models"`      // algo ids: linear, rf, xgboost, lightgbm, mlp, lstm
+	GithubToken   string   `json:"github_token,omitempty"`
+	Repos         []string `json:"repos"` // owner/name slugs
+	HistoryMonths int      `json:"history_months"`
+	Models        []string `json:"models"` // algo ids: linear, rf, xgboost, lightgbm, mlp, lstm
 }
 
 // Validate enforces the minimal preconditions. The frontend duplicates
@@ -71,6 +71,17 @@ func (o *Orchestrator) Start(ctx context.Context, req SetupRequest) (int64, erro
 		return 0, err
 	}
 
+	// Persist the GitHub PAT (if provided) into system_state so it survives
+	// the bootstrap and is available for later syncs without re-entering it.
+	// Empty token clears any existing value — matches the explicit
+	// "clear by submitting empty" convention in /admin/settings.
+	if req.GithubToken != "" {
+		if err := o.db.SetGithubPAT(ctx, req.GithubToken); err != nil {
+			// Non-fatal — bootstrap can still proceed with the in-memory token.
+			log.Warn().Err(err).Msg("persist github pat")
+		}
+	}
+
 	// Register the repos. Existing ones are a no-op (UNIQUE conflict).
 	for _, slug := range req.Repos {
 		owner, name, err := store.ParseGithubURL(slug)
@@ -100,9 +111,9 @@ func (o *Orchestrator) Start(ctx context.Context, req SetupRequest) (int64, erro
 // Handler returns the bgjobs.Handler bound to this orchestrator.
 //
 // Three phases (matches /setup UI):
-//   1. data collection   — enqueue collect_history per repo, wait for terminal state
-//   2. feature extraction — enqueue compute_features, wait
-//   3. model training    — enqueue train_model per algo, wait
+//  1. data collection   — enqueue collect_history per repo, wait for terminal state
+//  2. feature extraction — enqueue compute_features, wait
+//  3. model training    — enqueue train_model per algo, wait
 //
 // We wait on phase 1 because compute_features and train_model both
 // depend on rows in `jobs`. Phase 3's wait is so the bootstrap row

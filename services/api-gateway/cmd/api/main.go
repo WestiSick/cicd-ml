@@ -221,6 +221,12 @@ func computeFeaturesHandler(mlClient *ml.Client) bgjobs.Handler {
 //
 // The bg_jobs.payload carries {repo, months, github_token} — see
 // bootstrap.Orchestrator.Handler where these rows are enqueued.
+//
+// Token resolution priority: payload.github_token → persisted PAT from
+// system_state (set via /admin/settings) → empty (unauthenticated, 60/h).
+// Pause is honoured here as a safety net — the UI's Pause button just
+// flips the repo status; this handler skips with a friendly bg_job message
+// instead of running a sync the user explicitly didn't want.
 func collectHandler(syncer *gh.Syncer) bgjobs.Handler {
 	return func(ctx context.Context, job store.BGJob, progress bgjobs.ProgressFn) error {
 		var payload struct {
@@ -238,7 +244,22 @@ func collectHandler(syncer *gh.Syncer) bgjobs.Handler {
 		if payload.Months == 0 {
 			payload.Months = 6
 		}
-		syncer.Client = gh.NewClient(payload.GithubToken)
+
+		// Pause check: skip with a no-op if the repo was paused after the
+		// bg_job was enqueued (e.g. user clicked Sync then Pause back-to-back).
+		if existing, err := syncer.DB.LookupRepo(ctx, owner, name); err == nil && existing.Status == "paused" {
+			progress(1, 1, "skipped — repository is paused", "")
+			return nil
+		}
+
+		token := payload.GithubToken
+		if token == "" {
+			if persisted, err := syncer.DB.GetGithubPAT(ctx); err == nil {
+				token = persisted
+			}
+		}
+
+		syncer.Client = gh.NewClient(token)
 		return syncer.Run(ctx, gh.RunInput{
 			RepoOwner: owner,
 			RepoName:  name,

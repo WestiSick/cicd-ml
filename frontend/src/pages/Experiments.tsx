@@ -9,7 +9,8 @@ import { Button } from "@/components/Button";
 import { StatusChip } from "@/components/StatusChip";
 import { EmptyState } from "@/components/EmptyState";
 import { ApiError } from "@/api/client";
-import { activateModel, listModels, startTraining, type ModelRow } from "@/api/models";
+import { activateModel, deleteModel, listModels, modelDownloadURL, startTraining, type ModelRow } from "@/api/models";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { listBGJobs, type BGJob } from "@/api/bgjobs";
 import { exportThesisPack } from "@/api/thesisExport";
 import { useWebSocket } from "@/hooks/useWebSocket";
@@ -190,11 +191,18 @@ export function Experiments() {
                 <Th>R²</Th>
                 <Th>Spearman</Th>
                 <Th>{t("exp.col.trained")}</Th>
-                <Th>{" "}</Th>
+                <Th>{t("exp.col.actions")}</Th>
               </tr>
             </thead>
             <tbody>
-              {modelsQ.data.map((m) => <ModelRowEl key={m.id} m={m} onActivate={() => activate1.mutate(m.id)} />)}
+              {modelsQ.data.map((m) => (
+                <ModelRowEl
+                  key={m.id}
+                  m={m}
+                  onActivate={() => activate1.mutate(m.id)}
+                  onDeleted={() => qc.invalidateQueries({ queryKey: ["models"] })}
+                />
+              ))}
             </tbody>
           </table>
         </Card>
@@ -214,8 +222,35 @@ export function Experiments() {
   );
 }
 
-function ModelRowEl({ m, onActivate }: { m: ModelRow; onActivate: () => void }) {
+function ModelRowEl({
+  m,
+  onActivate,
+  onDeleted,
+}: {
+  m: ModelRow;
+  onActivate: () => void;
+  onDeleted: () => void;
+}) {
   const t = useT();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const remove = useMutation({
+    mutationFn: () => deleteModel(m.id),
+    onSuccess: () => {
+      toast.success(t("exp.toast.deleted"));
+      onDeleted();
+    },
+    onError: (err: unknown) => {
+      if (err instanceof ApiError && err.code === "model_is_active") {
+        toast.error(t("exp.toast.cannot_delete_active"));
+      } else if (err instanceof ApiError) {
+        toast.error(err.message, { description: err.userAction });
+      } else {
+        toast.error("delete failed");
+      }
+    },
+  });
+
   const metric = (k: string) => {
     const v = m.metrics?.[k];
     if (typeof v !== "number" || !isFinite(v)) return "—";
@@ -244,11 +279,37 @@ function ModelRowEl({ m, onActivate }: { m: ModelRow; onActivate: () => void }) 
       <Td mono>{metric("spearman_test")}</Td>
       <Td mono small>{new Date(m.trained_at).toISOString().slice(0, 16).replace("T", " ")}</Td>
       <Td>
-        {m.is_active ? (
-          <StatusChip status="synced" />
-        ) : (
-          <Button size="sm" variant="ghost" onClick={onActivate}>{t("common.activate")}</Button>
-        )}
+        <div style={{ display: "flex", gap: "var(--s-2)", alignItems: "center", justifyContent: "flex-end" }}>
+          {m.is_active ? (
+            <StatusChip status="synced" />
+          ) : (
+            <Button size="sm" variant="ghost" onClick={onActivate}>{t("common.activate")}</Button>
+          )}
+          <a
+            href={modelDownloadURL(m.id)}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ fontSize: 12, color: "var(--text-secondary)", textDecoration: "none" }}
+            title={t("exp.action.download")}
+          >
+            {t("common.download")}
+          </a>
+          {!m.is_active && (
+            <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(true)}>
+              {t("exp.action.delete")}
+            </Button>
+          )}
+        </div>
+        <ConfirmDialog
+          open={confirmDelete}
+          title={t("exp.delete.title")}
+          message={t("exp.delete.message")}
+          confirmLabel={t("exp.delete.confirm")}
+          requireText={m.name}
+          danger
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() => { setConfirmDelete(false); remove.mutate(); }}
+        />
       </Td>
     </tr>
   );

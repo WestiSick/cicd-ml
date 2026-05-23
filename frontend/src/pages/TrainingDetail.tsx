@@ -1,19 +1,24 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 
 import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/Card";
+import { Button } from "@/components/Button";
 import { StatusChip } from "@/components/StatusChip";
 import { EmptyState } from "@/components/EmptyState";
 import { LineChart, type Series } from "@/components/LineChart";
 import { ScatterPlot } from "@/components/ScatterPlot";
 import { HBarChart } from "@/components/HBarChart";
-import { getBGJob, type BGJob } from "@/api/bgjobs";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { ApiError } from "@/api/client";
+import { cancelBGJob, getBGJob, type BGJob } from "@/api/bgjobs";
 import { listTrainingMetrics, type IterationMetric } from "@/api/trainingMetrics";
 import { listModels } from "@/api/models";
 import { getFeatureImportance, getPredictedVsActual } from "@/api/modelDetail";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { useT } from "@/i18n";
 
 /* /experiments/jobs/:id — live training run view.
  *
@@ -30,8 +35,11 @@ import { useWebSocket } from "@/hooks/useWebSocket";
  * refreshes.
  */
 export function TrainingDetail() {
+  const t = useT();
+  const qc = useQueryClient();
   const { id } = useParams();
   const jobId = Number(id);
+  const [confirmCancel, setConfirmCancel] = useState(false);
 
   const jobQ = useQuery({
     queryKey: ["bg-job", jobId],
@@ -120,12 +128,41 @@ export function TrainingDetail() {
 
   const job = jobQ.data;
   const pct = job && job.total > 0 ? Math.round((job.progress / job.total) * 100) : 0;
+  const canCancel = job && (job.status === "queued" || job.status === "running");
+
+  const cancel = useMutation({
+    mutationFn: () => cancelBGJob(jobId),
+    onSuccess: () => {
+      toast.success(t("train_detail.toast.cancelled"));
+      qc.invalidateQueries({ queryKey: ["bg-job", jobId] });
+    },
+    onError: (err: unknown) => {
+      if (err instanceof ApiError) toast.error(err.message, { description: err.userAction });
+      else toast.error("cancel failed");
+    },
+  });
 
   return (
     <>
       <PageHeader
         title={`Training #${id}`}
         subtitle={job ? `${(job.payload as Record<string, unknown>)?.algo ?? "unknown"} — ${job.status}` : "Loading…"}
+        actions={
+          canCancel ? (
+            <Button variant="danger" onClick={() => setConfirmCancel(true)} loading={cancel.isPending}>
+              {t("train_detail.cancel")}
+            </Button>
+          ) : undefined
+        }
+      />
+      <ConfirmDialog
+        open={confirmCancel}
+        title={t("train_detail.cancel")}
+        message={t("train_detail.cancel.confirm")}
+        confirmLabel={t("train_detail.cancel")}
+        danger
+        onCancel={() => setConfirmCancel(false)}
+        onConfirm={() => { setConfirmCancel(false); cancel.mutate(); }}
       />
 
       {jobQ.isLoading && <p style={mutedText}>Loading…</p>}
@@ -177,6 +214,34 @@ export function TrainingDetail() {
               {job.error}
             </p>
           )}
+          {job.logs_tail && (
+            <div style={{ marginTop: "var(--s-4)" }}>
+              <div
+                className="caps"
+                style={{ color: "var(--text-tertiary)", marginBottom: "var(--s-2)", fontSize: "var(--fs-11)" }}
+              >
+                {t("train_detail.logs")}
+              </div>
+              <pre
+                style={{
+                  margin: 0,
+                  padding: "var(--s-3)",
+                  background: "var(--bg-base)",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "var(--r-6)",
+                  color: "var(--text-secondary)",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 11,
+                  lineHeight: 1.5,
+                  maxHeight: 240,
+                  overflow: "auto",
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {job.logs_tail}
+              </pre>
+            </div>
+          )}
         </Card>
       )}
 
@@ -218,16 +283,30 @@ export function TrainingDetail() {
             />
           )}
           {pvaQ.data && pvaQ.data.length > 0 && (
-            <Card>
-              <div className="caps" style={{ color: "var(--text-tertiary)", marginBottom: "var(--s-2)" }}>
-                {pvaQ.data.length} job(s) · dashed line = perfect prediction
-              </div>
-              <ScatterPlot
-                points={pvaQ.data.map((p) => ({ x: p.actual_sec, y: p.predicted_sec }))}
-                width={560}
-                height={400}
-              />
-            </Card>
+            <>
+              <Card>
+                <div className="caps" style={{ color: "var(--text-tertiary)", marginBottom: "var(--s-2)" }}>
+                  {pvaQ.data.length} job(s) · dashed line = perfect prediction
+                </div>
+                <ScatterPlot
+                  points={pvaQ.data.map((p) => ({ x: p.actual_sec, y: p.predicted_sec }))}
+                  width={560}
+                  height={400}
+                />
+              </Card>
+
+              <h2 style={{ ...sectionTitleStyle, marginTop: "var(--s-8)" }}>
+                {t("train_detail.residuals")}
+              </h2>
+              <Card>
+                <ResidualsPlot
+                  points={pvaQ.data.map((p) => ({
+                    actual: p.actual_sec,
+                    residual: p.predicted_sec - p.actual_sec,
+                  }))}
+                />
+              </Card>
+            </>
           )}
 
           <h2 style={{ ...sectionTitleStyle, marginTop: "var(--s-8)" }}>
@@ -251,6 +330,70 @@ export function TrainingDetail() {
         </>
       )}
     </>
+  );
+}
+
+/* ResidualsPlot — small linear scatter for (actual, predicted-actual).
+ *
+ * The PvA scatter is log-log because durations span orders of magnitude
+ * and the user wants to see structure across the whole range. Residuals
+ * are different: they're signed and centred near zero, so a linear y-axis
+ * is the right call. We keep the implementation tiny rather than
+ * generalising ScatterPlot — two callers, two scales, two charts.
+ *
+ * A horizontal zero-line is the reference: any structural pattern in
+ * residuals (a trend, fan, or cluster) means the model's biased and a
+ * different feature set might help. */
+function ResidualsPlot({ points }: { points: { actual: number; residual: number }[] }) {
+  const width = 720, height = 280;
+  const margin = { top: 12, right: 16, bottom: 32, left: 56 };
+  const innerW = width - margin.left - margin.right;
+  const innerH = height - margin.top - margin.bottom;
+
+  let xMax = 1, yMin = 0, yMax = 0;
+  for (const p of points) {
+    if (p.actual > xMax) xMax = p.actual;
+    if (p.residual < yMin) yMin = p.residual;
+    if (p.residual > yMax) yMax = p.residual;
+  }
+  const yAbs = Math.max(Math.abs(yMin), Math.abs(yMax), 1);
+  const xScale = (v: number) => (v / xMax) * innerW;
+  const yScale = (v: number) => innerH / 2 - (v / yAbs) * (innerH / 2);
+
+  return (
+    <svg width={width} height={height} role="img" aria-label="residuals scatter">
+      <g transform={`translate(${margin.left}, ${margin.top})`}>
+        <line
+          x1={0} x2={innerW}
+          y1={yScale(0)} y2={yScale(0)}
+          stroke="var(--border-strong)" strokeDasharray="3 3"
+        />
+        {points.map((p, i) => (
+          <circle
+            key={i}
+            cx={xScale(p.actual)} cy={yScale(p.residual)}
+            r={2} fill="var(--accent)" fillOpacity={0.45}
+          />
+        ))}
+        <text
+          x={innerW / 2} y={innerH + 24}
+          textAnchor="middle"
+          fontFamily="var(--font-mono)" fontSize={10}
+          fill="var(--text-tertiary)"
+        >
+          actual (sec)
+        </text>
+        <text
+          x={-innerH / 2} y={-44}
+          transform="rotate(-90)"
+          textAnchor="middle"
+          fontFamily="var(--font-mono)" fontSize={10}
+          fill="var(--text-tertiary)"
+        >
+          residual (predicted − actual, sec)
+        </text>
+      </g>
+    </svg>
   );
 }
 

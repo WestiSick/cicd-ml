@@ -44,3 +44,15 @@ export async function startTraining(req: StartTrainingRequest): Promise<StartTra
     body: JSON.stringify(req),
   });
 }
+
+export async function deleteModel(id: number): Promise<{ predictions_deleted: number }> {
+  return api(`/api/models/${id}`, { method: "DELETE" });
+}
+
+// Browser-friendly download URL. We don't fetch the bytes through the
+// `api()` wrapper because the response is a binary stream; let the browser
+// follow the URL and save the joblib file directly.
+export function modelDownloadURL(id: number): string {
+  const base = (import.meta.env.VITE_API_BASE as string) || "http://localhost:8080";
+  return `${base}/api/models/${id}/download`;
+}

@@ -57,7 +57,7 @@ func NewServer(cfg config.Config, db *store.DB, hub *ws.Hub, mlClient *ml.Client
 	return s
 }
 
-func (s *Server) Router() chi.Router { return s.r }
+func (s *Server) Router() chi.Router                    { return s.r }
 func (s *Server) Orchestrator() *bootstrap.Orchestrator { return s.orches }
 
 func (s *Server) buildRouter() chi.Router {
@@ -90,6 +90,10 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/repos", s.listRepos)
 		r.Post("/repos", s.addRepo)
 		r.Post("/repos/{id}/sync", s.syncRepo)
+		r.Post("/repos/{id}/pause", s.pauseRepo)
+		r.Post("/repos/{id}/resume", s.resumeRepo)
+		r.Post("/repos/{id}/resync", s.resyncRepo)
+		r.Delete("/repos/{id}", s.deleteRepo)
 
 		// Setup / bootstrap.
 		r.Post("/setup/start", s.startSetup)
@@ -97,6 +101,7 @@ func (s *Server) buildRouter() chi.Router {
 		// Background jobs (read-only — workers write).
 		r.Get("/bg-jobs", s.listBGJobs)
 		r.Get("/bg-jobs/{id}", s.getBGJob)
+		r.Post("/bg-jobs/{id}/cancel", s.cancelBGJob)
 
 		// Activity log.
 		r.Get("/activity", s.listActivity)
@@ -104,13 +109,16 @@ func (s *Server) buildRouter() chi.Router {
 		// Admin / diagnostics.
 		r.Get("/admin/webhooks", s.listAdminWebhooks)
 		r.Get("/admin/health", s.systemHealth)
+		r.Post("/admin/settings", s.updateAdminSettings)
 
 		// Models registry.
 		r.Get("/models", s.listModels)
 		r.Get("/models/{id}", s.getModel)
 		r.Get("/models/{id}/feature-importance", s.getModelFeatureImportance)
 		r.Get("/models/{id}/predicted-vs-actual", s.getModelPredictedVsActual)
+		r.Get("/models/{id}/download", s.downloadModelArtifact)
 		r.Post("/models/{id}/activate", s.activateModel)
+		r.Delete("/models/{id}", s.deleteModel)
 
 		// Thesis pack export — bundles every dissertation-relevant CSV
 		// into the mounted thesis-output volume.
@@ -128,9 +136,9 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/simulator/runs", s.listSimRuns)
 		r.Post("/simulator/run", s.runSimulator)
 		r.Get("/simulator/strategies", s.listStrategies)
-		r.Get("/queue", s.notImplemented("queue state"))
-		r.Get("/datasets", s.notImplemented("datasets summary"))
-		r.Get("/datasets/{id}", s.notImplemented("dataset detail"))
+		r.Get("/queue", s.queueSnapshot)
+		r.Get("/datasets", s.datasetsSummary)
+		r.Get("/datasets/{id}", s.datasetDetail)
 	})
 
 	r.Post("/webhooks/github", s.handleGithubWebhook)

@@ -14,30 +14,36 @@ import (
 )
 
 type Config struct {
-	Bind                 string
-	PostgresDSN          string
-	RedisAddr            string
-	MLBaseURL            string
-	JWTSecret            string
-	GithubWebhookSecret  string
-	PublicAPIBase        string
-	PublicWSBase         string
+	Bind                   string
+	PostgresDSN            string
+	RedisAddr              string
+	MLBaseURL              string
+	JWTSecret              string
+	GithubWebhookSecret    string
+	PublicAPIBase          string
+	PublicWSBase           string
 	BootstrapDefaultMonths int
-	LogLevel             zerolog.Level
+	// ModelsDir is the path on the api-gateway container where the joblib
+	// artifacts live — shared volume with ml-service so we can stream
+	// downloads without proxying through the ML service. Defaults match the
+	// compose mount.
+	ModelsDir string
+	LogLevel  zerolog.Level
 }
 
 func Load() Config {
 	return Config{
-		Bind:                  getenv("API_BIND", "0.0.0.0:8080"),
-		PostgresDSN:           getenv("POSTGRES_DSN", ""),
-		RedisAddr:             getenv("REDIS_ADDR", "redis:6379"),
-		MLBaseURL:             getenv("ML_BASE_URL", "http://ml:8000"),
-		JWTSecret:             getenv("JWT_SECRET", "dev"),
-		GithubWebhookSecret:   getenv("GITHUB_WEBHOOK_SECRET", ""),
-		PublicAPIBase:         getenv("PUBLIC_API_BASE", "http://localhost:8080"),
-		PublicWSBase:          getenv("PUBLIC_WS_BASE", "ws://localhost:8080"),
+		Bind:                   getenv("API_BIND", "0.0.0.0:8080"),
+		PostgresDSN:            getenv("POSTGRES_DSN", ""),
+		RedisAddr:              getenv("REDIS_ADDR", "redis:6379"),
+		MLBaseURL:              getenv("ML_BASE_URL", "http://ml:8000"),
+		JWTSecret:              getenv("JWT_SECRET", "dev"),
+		GithubWebhookSecret:    getenv("GITHUB_WEBHOOK_SECRET", ""),
+		PublicAPIBase:          getenv("PUBLIC_API_BASE", "http://localhost:8080"),
+		PublicWSBase:           getenv("PUBLIC_WS_BASE", "ws://localhost:8080"),
 		BootstrapDefaultMonths: getint("BOOTSTRAP_DEFAULT_MONTHS", 6),
-		LogLevel:              parseLevel(getenv("LOG_LEVEL", "info")),
+		ModelsDir:              getenv("MODELS_DIR", "/var/lib/cicdml/models"),
+		LogLevel:               parseLevel(getenv("LOG_LEVEL", "info")),
 	}
 }
 

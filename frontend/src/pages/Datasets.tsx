@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -7,10 +8,21 @@ import { Card } from "@/components/Card";
 import { StatusChip } from "@/components/StatusChip";
 import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ApiError } from "@/api/client";
-import { addRepo, listRepos, syncRepo, type Repo } from "@/api/repos";
+import {
+  addRepo,
+  deleteRepo,
+  listRepos,
+  pauseRepo,
+  resumeRepo,
+  resyncRepo,
+  syncRepo,
+  type Repo,
+} from "@/api/repos";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useT } from "@/i18n";
+import { formatRelativeTime } from "@/lib/format";
 
 export function Datasets() {
   const t = useT();
@@ -92,6 +104,8 @@ export function Datasets() {
 
 function RepoCard({ repo, onSynced }: { repo: Repo; onSynced: () => void }) {
   const t = useT();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
   const sync = useMutation({
     mutationFn: () => syncRepo(repo.id),
     onSuccess: (r) => {
@@ -106,35 +120,78 @@ function RepoCard({ repo, onSynced }: { repo: Repo; onSynced: () => void }) {
     },
   });
 
-  // A "Sync" action makes sense whenever the repo isn't actively being
-  // fetched. fetching/running cards already show progress — extra
-  // button would only let the user double-queue work for nothing.
-  const canSync = repo.status !== "fetching";
+  const pause = useMutation({
+    mutationFn: () => pauseRepo(repo.id),
+    onSuccess: () => { toast.success(t("datasets.toast.paused")); onSynced(); },
+    onError: (err: unknown) => err instanceof ApiError ? toast.error(err.message) : toast.error("pause failed"),
+  });
+  const resume = useMutation({
+    mutationFn: () => resumeRepo(repo.id),
+    onSuccess: () => { toast.success(t("datasets.toast.resumed")); onSynced(); },
+    onError: (err: unknown) => err instanceof ApiError ? toast.error(err.message) : toast.error("resume failed"),
+  });
+  const resync = useMutation({
+    mutationFn: () => resyncRepo(repo.id),
+    onSuccess: () => { toast.success(t("datasets.toast.resync_queued")); onSynced(); },
+    onError: (err: unknown) => err instanceof ApiError ? toast.error(err.message) : toast.error("resync failed"),
+  });
+  const remove = useMutation({
+    mutationFn: () => deleteRepo(repo.id),
+    onSuccess: (r) => {
+      toast.success(t("datasets.toast.removed", { slug: `${repo.owner}/${repo.name}` }),
+        { description: t("datasets.toast.removed_desc", { n: r.rows_deleted }) });
+      onSynced();
+    },
+    onError: (err: unknown) => err instanceof ApiError ? toast.error(err.message) : toast.error("delete failed"),
+  });
+
+  // Sync is meaningful unless we're already fetching. paused → resume first.
+  const canSync = repo.status !== "fetching" && repo.status !== "paused";
 
   return (
     <Card>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "var(--s-2)" }}>
-        <div className="mono" style={{ fontSize: "var(--fs-14)", fontWeight: 500 }}>
+        <Link
+          to={`/datasets/${repo.id}`}
+          className="mono"
+          style={{
+            fontSize: "var(--fs-14)",
+            fontWeight: 500,
+            color: "var(--text-primary)",
+            textDecoration: "none",
+          }}
+        >
           {repo.owner}/{repo.name}
-        </div>
+        </Link>
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
           {canSync && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => sync.mutate()}
-              loading={sync.isPending}
-            >
+            <Button size="sm" variant="ghost" onClick={() => sync.mutate()} loading={sync.isPending}>
               {repo.status === "idle" ? t("common.start_sync") : t("common.sync")}
             </Button>
           )}
+          {repo.status === "paused" ? (
+            <Button size="sm" variant="ghost" onClick={() => resume.mutate()} loading={resume.isPending}>
+              {t("common.resume")}
+            </Button>
+          ) : (
+            <Button size="sm" variant="ghost" onClick={() => pause.mutate()} loading={pause.isPending}>
+              {t("common.pause")}
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" onClick={() => resync.mutate()} loading={resync.isPending}>
+            {t("common.resync")}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(true)}>
+            {t("common.remove")}
+          </Button>
           <StatusChip status={repo.status} />
         </div>
       </div>
+
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "1fr 1fr 1fr",
+          gridTemplateColumns: "1fr 1fr 1fr 1fr",
           gap: "var(--s-3)",
           marginTop: "var(--s-3)",
         }}
@@ -142,12 +199,33 @@ function RepoCard({ repo, onSynced }: { repo: Repo; onSynced: () => void }) {
         <Stat label={t("datasets.card.runs")} value={repo.runs_count.toLocaleString()} mono />
         <Stat label={t("datasets.card.jobs")} value={repo.jobs_count.toLocaleString()} mono />
         <Stat
-          label={t("datasets.card.added")}
-          value={new Date(repo.added_at).toISOString().slice(0, 10)}
+          label={t("datasets.card.coverage")}
+          value={coverageLabel(repo)}
+          mono
+          small
+        />
+        <Stat
+          label={t("datasets.card.last_synced")}
+          value={repo.last_synced_at ? formatRelativeTime(repo.last_synced_at) : "—"}
           mono
           small
         />
       </div>
+
+      {repo.tracked_branches && repo.tracked_branches.length > 0 && (
+        <div
+          className="mono"
+          style={{
+            marginTop: "var(--s-3)",
+            fontSize: "var(--fs-12)",
+            color: "var(--text-tertiary)",
+          }}
+        >
+          {repo.tracked_branches.slice(0, 4).join(" · ")}
+          {repo.tracked_branches.length > 4 && ` · +${repo.tracked_branches.length - 4}`}
+        </div>
+      )}
+
       {repo.last_error && (
         <div
           style={{
@@ -163,8 +241,29 @@ function RepoCard({ repo, onSynced }: { repo: Repo; onSynced: () => void }) {
           {repo.last_error}
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title={t("datasets.delete.title")}
+        message={t("datasets.delete.message", { slug: `${repo.owner}/${repo.name}` })}
+        confirmLabel={t("datasets.delete.confirm")}
+        requireText={`${repo.owner}/${repo.name}`}
+        danger
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={() => {
+          setConfirmDelete(false);
+          remove.mutate();
+        }}
+      />
     </Card>
   );
+}
+
+function coverageLabel(repo: Repo): string {
+  if (!repo.oldest_run_at || !repo.newest_run_at) return "—";
+  const o = repo.oldest_run_at.slice(0, 10);
+  const n = repo.newest_run_at.slice(0, 10);
+  return `${o} → ${n}`;
 }
 
 function Stat({

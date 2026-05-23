@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/Card";
@@ -7,6 +8,8 @@ import { Button } from "@/components/Button";
 import { StatusChip } from "@/components/StatusChip";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useT } from "@/i18n";
+import { fetchSystemState } from "@/api/system";
+import { formatDuration } from "@/lib/format";
 
 type QueueEvent = {
   type: string;
@@ -17,6 +20,8 @@ type QueueEvent = {
   status?: string;
   conclusion?: string;
   head_sha?: string;
+  predicted_sec?: number; // populated by api-gateway via ml-service on workflow_run.requested
+  model_algo?: string;
   receivedAt: string;     // client-side
 };
 
@@ -33,18 +38,29 @@ export function Dashboard() {
   const t = useT();
   const [events, setEvents] = useState<QueueEvent[]>([]);
 
+  // System state — gives us the active model id/algo/MAE and the active
+  // strategy. Polled at 5s; refresh isn't critical, the values only change
+  // when the user clicks Activate.
+  const systemQ = useQuery({
+    queryKey: ["system-state"],
+    queryFn: fetchSystemState,
+    refetchInterval: 5_000,
+  });
+
   const { connected } = useWebSocket("/ws/queue", (msg) => {
     if (!msg.type.startsWith("workflow_run.")) return;
     const data = (msg.data ?? {}) as Record<string, unknown>;
     const ev: QueueEvent = {
       type: msg.type,
-      repo:       typeof data.repo === "string" ? data.repo : undefined,
-      branch:     typeof data.branch === "string" ? data.branch : undefined,
-      run_id:     typeof data.run_id === "number" ? data.run_id : undefined,
-      workflow:   typeof data.workflow === "string" ? data.workflow : undefined,
-      status:     typeof data.status === "string" ? data.status : undefined,
-      conclusion: typeof data.conclusion === "string" ? data.conclusion : undefined,
-      head_sha:   typeof data.head_sha === "string" ? data.head_sha : undefined,
+      repo:          typeof data.repo === "string" ? data.repo : undefined,
+      branch:        typeof data.branch === "string" ? data.branch : undefined,
+      run_id:        typeof data.run_id === "number" ? data.run_id : undefined,
+      workflow:      typeof data.workflow === "string" ? data.workflow : undefined,
+      status:        typeof data.status === "string" ? data.status : undefined,
+      conclusion:    typeof data.conclusion === "string" ? data.conclusion : undefined,
+      head_sha:      typeof data.head_sha === "string" ? data.head_sha : undefined,
+      predicted_sec: typeof data.predicted_sec === "number" ? data.predicted_sec : undefined,
+      model_algo:    typeof data.model_algo === "string" ? data.model_algo : undefined,
       receivedAt: new Date().toISOString(),
     };
     setEvents((cur) => [ev, ...cur].slice(0, 20));
@@ -66,8 +82,20 @@ export function Dashboard() {
           marginBottom: "var(--s-6)",
         }}
       >
-        <Kpi label={t("dashboard.kpi.active_model")} value="—" hint={t("dashboard.kpi.not_trained")} />
-        <Kpi label={t("dashboard.kpi.strategy")} value="—" hint={t("dashboard.kpi.not_configured")} />
+        <Kpi
+          label={t("dashboard.kpi.active_model")}
+          value={systemQ.data?.active_model ? `${systemQ.data.active_model.algo}` : "—"}
+          hint={
+            systemQ.data?.active_model?.metrics?.test_mae !== undefined
+              ? `MAE ${formatDuration(systemQ.data.active_model.metrics.test_mae)}`
+              : t("dashboard.kpi.not_trained")
+          }
+        />
+        <Kpi
+          label={t("dashboard.kpi.strategy")}
+          value={systemQ.data?.active_strategy ? systemQ.data.active_strategy.toUpperCase() : "—"}
+          hint={systemQ.data?.active_strategy ? "/admin → strategy" : t("dashboard.kpi.not_configured")}
+        />
         <Kpi
           label={t("dashboard.kpi.live_feed")}
           value={connected ? t("common.online") : t("common.offline")}
@@ -132,8 +160,9 @@ function EventRow({ event, fresh }: { event: QueueEvent; fresh: boolean }) {
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "100px 90px 1fr 1fr 80px",
+        gridTemplateColumns: "80px 90px 1fr 1fr 90px 80px",
         alignItems: "center",
+        gap: "var(--s-2)",
         padding: "8px 0",
         borderTop: "1px solid var(--border-subtle)",
         background: fresh ? "var(--accent-soft)" : "transparent",
@@ -147,6 +176,17 @@ function EventRow({ event, fresh }: { event: QueueEvent; fresh: boolean }) {
       <span className="mono" style={{ fontSize: "var(--fs-13)" }}>{event.repo ?? "—"}</span>
       <span className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)" }}>
         {event.branch ? `${event.branch} · ${(event.head_sha ?? "").slice(0, 7)}` : "—"}
+      </span>
+      <span
+        className="mono"
+        style={{
+          fontSize: "var(--fs-12)",
+          color: event.predicted_sec !== undefined ? "var(--accent)" : "var(--text-tertiary)",
+          textAlign: "right",
+        }}
+        title={event.model_algo ? `predicted by ${event.model_algo}` : undefined}
+      >
+        {event.predicted_sec !== undefined ? formatDuration(event.predicted_sec) : "—"}
       </span>
       <span className="mono caps" style={{ fontSize: 11, color: "var(--text-tertiary)" }}>
         {action}

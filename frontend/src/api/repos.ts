@@ -56,3 +56,45 @@ export async function syncRepo(
     body: JSON.stringify(opts),
   });
 }
+
+export async function pauseRepo(id: number): Promise<void> {
+  await api(`/api/repos/${id}/pause`, { method: "POST" });
+}
+
+export async function resumeRepo(id: number): Promise<void> {
+  await api(`/api/repos/${id}/resume`, { method: "POST" });
+}
+
+export async function resyncRepo(id: number): Promise<SyncRepoResponse> {
+  return await api<SyncRepoResponse>(`/api/repos/${id}/resync`, { method: "POST" });
+}
+
+export async function deleteRepo(id: number): Promise<{ deleted: boolean; rows_deleted: number }> {
+  return await api(`/api/repos/${id}`, { method: "DELETE" });
+}
+
+// /api/datasets — high-level totals shown in the dataset summary card.
+export type DatasetSummary = {
+  repo_count: number;
+  run_count: number;
+  job_count: number;
+  features_count: number;
+};
+
+export async function fetchDatasetsSummary(): Promise<DatasetSummary> {
+  return api<DatasetSummary>("/api/datasets");
+}
+
+// /api/datasets/{id} — per-repo stats for the detail page.
+export type DatasetDetail = {
+  repo: Repo;
+  duration_buckets: Array<{ label: string; lo: number; hi: number; count: number }>;
+  top_workflows:    Array<{ name: string; runs: number; p50_sec: number; p95_sec: number }>;
+  top_jobs:         Array<{ name: string; runs: number; mean_sec: number; p50_sec: number }>;
+  branch_breakdown: Array<{ branch: string; runs: number; mean_sec: number }>;
+  conclusion_counts: Record<string, number>;
+};
+
+export async function fetchDatasetDetail(id: number): Promise<DatasetDetail> {
+  return api<DatasetDetail>(`/api/datasets/${id}`);
+}

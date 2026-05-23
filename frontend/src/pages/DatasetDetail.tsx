@@ -1,20 +1,220 @@
-import { useParams } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 
 import { PageHeader } from "@/components/PageHeader";
+import { Card } from "@/components/Card";
 import { EmptyState } from "@/components/EmptyState";
+import { BarChart } from "@/components/BarChart";
+import { StatusChip } from "@/components/StatusChip";
+import { fetchDatasetDetail } from "@/api/repos";
+import { useT } from "@/i18n";
+import { formatDuration } from "@/lib/format";
 
+/* /datasets/:id — per-repo statistics page.
+ *
+ * Backed by GET /api/datasets/{id}. Renders five blocks:
+ *   - Duration histogram (log-binned, fixed boundaries — Chapter 3 chart)
+ *   - Top workflows by run count, with p50/p95
+ *   - Top job names, with mean/p50
+ *   - Branch breakdown
+ *   - Job conclusions (success/failure/cancelled)
+ *
+ * The page is "data window": no controls, no editing — every interaction
+ * is on the parent /datasets page. This keeps the URL stable for
+ * thesis-screenshot purposes. */
 export function DatasetDetail() {
-  const { id } = useParams();
+  const t = useT();
+  const { id } = useParams<{ id: string }>();
+  const repoID = id ? Number(id) : NaN;
+
+  const q = useQuery({
+    queryKey: ["dataset", repoID],
+    queryFn: () => fetchDatasetDetail(repoID),
+    enabled: Number.isFinite(repoID),
+    refetchInterval: 10_000,
+  });
+
+  if (!Number.isFinite(repoID)) {
+    return <EmptyState title="Invalid repository id" hint="The URL must be /datasets/<numeric-id>." />;
+  }
+  if (q.isLoading) return <EmptyState title={t("common.loading")} />;
+  if (q.isError || !q.data) {
+    return (
+      <EmptyState
+        title="Could not load dataset."
+        hint="The repository may have been removed, or the API is unavailable."
+        action={<Link to="/datasets">{t("datasets.detail.back")}</Link>}
+      />
+    );
+  }
+
+  const d = q.data;
+  const repo = d.repo;
+  const bucketData = d.duration_buckets.map((b) => ({ label: b.label, value: Number(b.count) }));
+
   return (
     <>
       <PageHeader
-        title={`Dataset #${id}`}
-        subtitle="Statistics, workflows and feature preview for this repository."
+        title={`${repo.owner}/${repo.name}`}
+        subtitle={`${repo.runs_count.toLocaleString()} runs · ${repo.jobs_count.toLocaleString()} jobs`}
+        actions={<Link to="/datasets" style={{ color: "var(--text-secondary)" }}>{t("datasets.detail.back")}</Link>}
       />
-      <EmptyState
-        title="Detail view coming online with the collector."
-        hint="Once the repo has been synced, distributions and per-workflow stats appear here."
-      />
+
+      <div style={{ display: "flex", gap: "var(--s-3)", marginBottom: "var(--s-4)", alignItems: "center" }}>
+        <StatusChip status={repo.status} />
+        {repo.oldest_run_at && repo.newest_run_at && (
+          <span className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
+            {repo.oldest_run_at.slice(0, 10)} → {repo.newest_run_at.slice(0, 10)}
+          </span>
+        )}
+        {repo.tracked_branches.length > 0 && (
+          <span className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-tertiary)" }}>
+            tracked: {repo.tracked_branches.join(", ")}
+          </span>
+        )}
+      </div>
+
+      <Card>
+        <SectionTitle>{t("datasets.detail.duration_dist")}</SectionTitle>
+        <BarChart data={bucketData} width={720} height={220} format={(v) => v.toLocaleString()} />
+      </Card>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s-3)", marginTop: "var(--s-3)" }}>
+        <Card>
+          <SectionTitle>{t("datasets.detail.top_workflows")}</SectionTitle>
+          <table style={tableStyle}>
+            <thead>
+              <tr>
+                <Th>workflow</Th>
+                <Th right>runs</Th>
+                <Th right>p50</Th>
+                <Th right>p95</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {d.top_workflows.map((w) => (
+                <tr key={w.name}>
+                  <Td mono>{w.name}</Td>
+                  <Td right mono>{w.runs.toLocaleString()}</Td>
+                  <Td right mono>{formatDuration(w.p50_sec)}</Td>
+                  <Td right mono>{formatDuration(w.p95_sec)}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+
+        <Card>
+          <SectionTitle>{t("datasets.detail.top_jobs")}</SectionTitle>
+          <table style={tableStyle}>
+            <thead>
+              <tr>
+                <Th>job</Th>
+                <Th right>runs</Th>
+                <Th right>mean</Th>
+                <Th right>p50</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {d.top_jobs.map((j) => (
+                <tr key={j.name}>
+                  <Td mono>{j.name}</Td>
+                  <Td right mono>{j.runs.toLocaleString()}</Td>
+                  <Td right mono>{formatDuration(j.mean_sec)}</Td>
+                  <Td right mono>{formatDuration(j.p50_sec)}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s-3)", marginTop: "var(--s-3)" }}>
+        <Card>
+          <SectionTitle>{t("datasets.detail.branches")}</SectionTitle>
+          <table style={tableStyle}>
+            <thead>
+              <tr>
+                <Th>branch</Th>
+                <Th right>runs</Th>
+                <Th right>mean</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {d.branch_breakdown.map((b) => (
+                <tr key={b.branch}>
+                  <Td mono>{b.branch}</Td>
+                  <Td right mono>{b.runs.toLocaleString()}</Td>
+                  <Td right mono>{formatDuration(b.mean_sec)}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+
+        <Card>
+          <SectionTitle>{t("datasets.detail.conclusions")}</SectionTitle>
+          <BarChart
+            width={420}
+            height={220}
+            data={Object.entries(d.conclusion_counts).map(([k, v]) => ({ label: k, value: Number(v) }))}
+            format={(v) => v.toLocaleString()}
+          />
+        </Card>
+      </div>
     </>
+  );
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      className="caps"
+      style={{
+        color: "var(--text-tertiary)",
+        marginBottom: "var(--s-2)",
+        fontSize: "var(--fs-12)",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+const tableStyle: React.CSSProperties = {
+  width: "100%",
+  borderCollapse: "collapse",
+  fontSize: "var(--fs-12)",
+};
+function Th({ children, right }: { children: React.ReactNode; right?: boolean }) {
+  return (
+    <th
+      style={{
+        textAlign: right ? "right" : "left",
+        padding: "6px 8px",
+        borderBottom: "1px solid var(--border-subtle)",
+        color: "var(--text-tertiary)",
+        fontWeight: 500,
+        textTransform: "uppercase",
+        letterSpacing: "0.06em",
+        fontFamily: "var(--font-mono)",
+      }}
+    >
+      {children}
+    </th>
+  );
+}
+function Td({ children, right, mono }: { children: React.ReactNode; right?: boolean; mono?: boolean }) {
+  return (
+    <td
+      className={mono ? "mono" : undefined}
+      style={{
+        textAlign: right ? "right" : "left",
+        padding: "5px 8px",
+        borderBottom: "1px solid var(--border-subtle)",
+      }}
+    >
+      {children}
+    </td>
   );
 }

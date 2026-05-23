@@ -47,6 +47,35 @@ func (s *Server) getBGJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
+// POST /api/bg-jobs/{id}/cancel
+//
+// Marks the job as cancelled. The worker that owns it checks the cancel
+// flag at each progress callback (cooperative cancellation) and bails out
+// cleanly. Queued-but-not-started jobs are cancelled immediately and
+// never picked up. Already-done/failed jobs return a 409.
+func (s *Server) cancelBGJob(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Background job id must be numeric", "")
+		return
+	}
+	flipped, err := s.db.CancelBGJob(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "cancel_failed",
+			"Could not cancel job", "Retry — the job may have finished.")
+		return
+	}
+	if !flipped {
+		writeError(w, http.StatusConflict, "not_cancellable",
+			"Job already finished or never existed",
+			"Reload the page to see the current status.")
+		return
+	}
+	_ = s.db.RecordActivity(r.Context(), "user", "cancel_bg_job", strconv.FormatInt(id, 10),
+		"job cancelled", true, nil)
+	writeJSON(w, http.StatusOK, map[string]any{"cancelled": true})
+}
+
 // GET /api/activity?limit=100
 func (s *Server) listActivity(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))

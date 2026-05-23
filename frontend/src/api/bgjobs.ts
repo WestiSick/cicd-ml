@@ -27,3 +27,7 @@ export async function listBGJobs(opts: { status?: string; limit?: number } = {})
 export async function getBGJob(id: number): Promise<BGJob> {
   return await api<BGJob>(`/api/bg-jobs/${id}`);
 }
+
+export async function cancelBGJob(id: number): Promise<{ cancelled: boolean }> {
+  return api(`/api/bg-jobs/${id}/cancel`, { method: "POST" });
+}

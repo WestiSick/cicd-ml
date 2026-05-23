@@ -36,6 +36,23 @@ class PredictBody(BaseModel):
     dry_run: bool = False
 
 
+class PredictFromPayloadBody(BaseModel):
+    """Webhook-time prediction. Used by api-gateway's GitHub webhook
+    handler when the run doesn't yet exist in the DB.
+
+    Fields mirror what the workflow_run payload carries; missing values
+    are routed to the schema's __missing__ bucket so prediction still
+    works without a full feature row."""
+    repo_owner: str
+    repo_name: str
+    workflow_name: str | None = None
+    head_branch: str | None = None
+    event: str | None = None
+    job_name: str | None = None
+    runner_name: str | None = None
+    steps_count: int | None = None
+
+
 @router.post("/")
 async def predict(body: PredictBody) -> dict[str, Any]:
     s = load()
@@ -81,6 +98,58 @@ async def predict(body: PredictBody) -> dict[str, Any]:
         "model_id": int(active["id"]),
         "model_algo": active["algo"],
         "predictions": [{"job_id": int(j), "predicted_sec": float(p)} for j, p in rows],
+    }
+
+
+@router.post("/from-payload")
+async def predict_from_payload(body: PredictFromPayloadBody) -> dict[str, Any]:
+    """Webhook-time predict. The api-gateway calls this when GitHub sends a
+    workflow_run.requested before any row exists in `jobs` — we still want
+    a `predicted_sec` to show on the dashboard immediately, then refine it
+    once the run completes and lands in the DB.
+
+    We build a one-row DataFrame, transform via the *active* model's pinned
+    schema (unseen categoricals route to __other__, missing to __missing__),
+    and return the predicted seconds. No DB write here — the proper
+    `predictions` row gets created later by the job_ids path when the jobs
+    are persisted by the collector.
+    """
+    s = load()
+    active = db.fetch_active_model_row(s.postgres_dsn)
+    if active is None:
+        raise errors.APIError(
+            status=409,
+            code="no_active_model",
+            message="No active model — webhook predict cannot run.",
+            user_action="Train a model on /experiments and click Activate.",
+        )
+    model = _load_model_for_active(s.models_dir, active)
+    schema = model.schema
+    assert schema is not None
+
+    # Use current UTC time for time-based features. The webhook fires at
+    # workflow_run.requested, which is when GitHub would normally start
+    # scheduling — close enough for our hour_of_day / day_of_week features.
+    now = pd.Timestamp.utcnow()
+    df = pd.DataFrame([{
+        "repo_owner":     body.repo_owner,
+        "repo_name":      body.repo_name,
+        "workflow_name":  body.workflow_name,
+        "head_branch":    body.head_branch,
+        "event":          body.event,
+        "job_name":       body.job_name,
+        "runner_name":    body.runner_name,
+        "steps_count":    body.steps_count if body.steps_count is not None else 0,
+        "run_created_at": now,
+    }])
+    X, _, _ = transform(df, schema)
+    pred_log = model.estimator.predict(X)
+    predicted_sec = float(np.clip(np.expm1(pred_log[0]), 0.0, None))
+
+    return {
+        "model_id":      int(active["id"]),
+        "model_algo":    active["algo"],
+        "predicted_sec": predicted_sec,
     }
 
 

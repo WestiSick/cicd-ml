@@ -1,6 +1,8 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 
 import { AppShell } from "@/components/AppShell";
+import { ApiErrorBoundary } from "@/components/ApiErrorBoundary";
+import { CommandPalette } from "@/components/CommandPalette";
 import { Setup } from "@/pages/Setup";
 import { Dashboard } from "@/pages/Dashboard";
 import { Datasets } from "@/pages/Datasets";
@@ -32,19 +34,22 @@ export function App() {
   }
 
   return (
-    <Routes>
-      <Route element={<AppShell />}>
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/datasets" element={<Datasets />} />
-        <Route path="/datasets/:id" element={<DatasetDetail />} />
-        <Route path="/experiments" element={<Experiments />} />
-        <Route path="/experiments/jobs/:id" element={<TrainingDetail />} />
-        <Route path="/simulator" element={<Simulator />} />
-        <Route path="/admin" element={<Admin />} />
-        <Route path="*" element={<NotFound />} />
-      </Route>
-    </Routes>
+    <ApiErrorBoundary>
+      <CommandPalette />
+      <Routes>
+        <Route element={<AppShell />}>
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/datasets" element={<Datasets />} />
+          <Route path="/datasets/:id" element={<DatasetDetail />} />
+          <Route path="/experiments" element={<Experiments />} />
+          <Route path="/experiments/jobs/:id" element={<TrainingDetail />} />
+          <Route path="/simulator" element={<Simulator />} />
+          <Route path="/admin" element={<Admin />} />
+          <Route path="*" element={<NotFound />} />
+        </Route>
+      </Routes>
+    </ApiErrorBoundary>
   );
 }
 

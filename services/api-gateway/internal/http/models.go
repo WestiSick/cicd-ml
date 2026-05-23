@@ -3,7 +3,10 @@ package http
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 
@@ -116,6 +119,104 @@ func (s *Server) getModelFeatureImportance(w http.ResponseWriter, r *http.Reques
 		items = items[:topK]
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"features": items})
+}
+
+// DELETE /api/models/{id}
+//
+// Removes the model row and (via FK CASCADE) every prediction it ever
+// made. The active model can't be deleted — the UI grays the button.
+// Best-effort: the artifact file on disk is removed too; failure there is
+// logged but doesn't roll back the DB delete (a stale .joblib is harmless).
+func (s *Server) deleteModel(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Model id must be numeric", "")
+		return
+	}
+	m, err := s.db.GetModel(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "model_not_found", "No model with that id", "")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "model_lookup_failed", "", "")
+		return
+	}
+	preds, err := s.db.DeleteModel(r.Context(), id)
+	if err != nil {
+		if err.Error() == "cannot delete the currently active model" {
+			writeError(w, http.StatusConflict, "model_is_active",
+				"Cannot delete the currently active model",
+				"Activate a different model first, then try deleting.")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "delete_model_failed",
+			"Could not delete model", "Retry — the predictions may be partially gone.")
+		return
+	}
+	// Best-effort artifact cleanup. The path is stored relative to models_dir.
+	if m.ArtifactPath != nil && *m.ArtifactPath != "" {
+		full := filepath.Join(s.cfg.ModelsDir, *m.ArtifactPath)
+		_ = os.Remove(full) // ignore errors; logged via activity
+	}
+	_ = s.db.RecordActivity(r.Context(), "user", "delete_model", strconv.FormatInt(id, 10),
+		"model deleted", true, map[string]any{"predictions_deleted": preds})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"deleted":             true,
+		"predictions_deleted": preds,
+	})
+}
+
+// GET /api/models/{id}/download
+//
+// Streams the joblib artifact for a model. The Content-Disposition
+// suggests a filename like "model_42_xgboost.joblib" so a user clicking
+// Download in the UI gets something meaningful in their Downloads folder.
+//
+// Auth: same as the rest of /api — single-user JWT. The artifact is just
+// the trained estimator + the FeatureSchema; nothing user-private.
+func (s *Server) downloadModelArtifact(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Model id must be numeric", "")
+		return
+	}
+	m, err := s.db.GetModel(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "model_not_found", "No model with that id", "")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "model_lookup_failed", "", "")
+		return
+	}
+	if m.ArtifactPath == nil || *m.ArtifactPath == "" {
+		writeError(w, http.StatusNotFound, "artifact_missing",
+			"This model has no artifact on disk",
+			"Retrain the model — the .joblib was never persisted.")
+		return
+	}
+	full := filepath.Join(s.cfg.ModelsDir, *m.ArtifactPath)
+	f, err := os.Open(full)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "artifact_file_missing",
+			"Artifact file not found on disk",
+			"Retrain the model — the file was deleted out-of-band.")
+		return
+	}
+	defer f.Close()
+	st, _ := f.Stat()
+
+	suggested := "model_" + strconv.FormatInt(id, 10) + "_" + m.Algo + ".joblib"
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+suggested+`"`)
+	if st != nil {
+		w.Header().Set("Content-Length", strconv.FormatInt(st.Size(), 10))
+	}
+	if _, err := io.Copy(w, f); err != nil {
+		// Client likely disconnected; nothing actionable.
+		return
+	}
 }
 
 // GET /api/models/{id}/predicted-vs-actual?limit=1000

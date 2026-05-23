@@ -33,23 +33,23 @@ func NewClient(baseURL string) *Client {
 
 // TrainRequest mirrors ml-service's POST /train body.
 type TrainRequest struct {
-	Algo          string                 `json:"algo"`
-	Params        map[string]any         `json:"params,omitempty"`
-	RepoIDs       []int64                `json:"repo_ids,omitempty"`
-	Since         string                 `json:"since,omitempty"`
-	Name          string                 `json:"name,omitempty"`
-	TrainingJobID int64                  `json:"training_job_id,omitempty"`
-	Activate      bool                   `json:"activate"`
+	Algo          string         `json:"algo"`
+	Params        map[string]any `json:"params,omitempty"`
+	RepoIDs       []int64        `json:"repo_ids,omitempty"`
+	Since         string         `json:"since,omitempty"`
+	Name          string         `json:"name,omitempty"`
+	TrainingJobID int64          `json:"training_job_id,omitempty"`
+	Activate      bool           `json:"activate"`
 }
 
 type TrainResponse struct {
-	ModelID    int64                  `json:"model_id"`
-	Algo       string                 `json:"algo"`
-	Name       string                 `json:"name"`
-	Metrics    map[string]float64     `json:"metrics"`
-	TrainSize  int                    `json:"train_size"`
-	TestSize   int                    `json:"test_size"`
-	FeatureImp []FeatureImportance    `json:"feature_importance"`
+	ModelID    int64               `json:"model_id"`
+	Algo       string              `json:"algo"`
+	Name       string              `json:"name"`
+	Metrics    map[string]float64  `json:"metrics"`
+	TrainSize  int                 `json:"train_size"`
+	TestSize   int                 `json:"test_size"`
+	FeatureImp []FeatureImportance `json:"feature_importance"`
 }
 
 type FeatureImportance struct {
@@ -81,8 +81,8 @@ type OptunaRequest struct {
 // TrainResponse with extra `best_params` and `n_trials` fields.
 type OptunaResponse struct {
 	TrainResponse
-	NTrials     int            `json:"n_trials"`
-	BestParams  map[string]any `json:"best_params"`
+	NTrials     int                `json:"n_trials"`
+	BestParams  map[string]any     `json:"best_params"`
 	BestMetrics map[string]float64 `json:"best_metrics"`
 }
 
@@ -141,15 +141,49 @@ func (c *Client) Predict(ctx context.Context, req PredictRequest) (PredictRespon
 	return resp, nil
 }
 
+// PredictFromPayloadRequest matches ml-service POST /predict/from-payload.
+// Used by the webhook handler: at workflow_run.requested time we don't yet
+// have a row in `jobs`, but we want an immediate predicted_sec to show on
+// the dashboard. Mirrors the fields available on GitHub's workflow_run
+// payload.
+type PredictFromPayloadRequest struct {
+	RepoOwner    string  `json:"repo_owner"`
+	RepoName     string  `json:"repo_name"`
+	WorkflowName *string `json:"workflow_name,omitempty"`
+	HeadBranch   *string `json:"head_branch,omitempty"`
+	Event        *string `json:"event,omitempty"`
+	JobName      *string `json:"job_name,omitempty"`
+	RunnerName   *string `json:"runner_name,omitempty"`
+	StepsCount   *int    `json:"steps_count,omitempty"`
+}
+
+type PredictFromPayloadResponse struct {
+	ModelID      int64   `json:"model_id"`
+	ModelAlgo    string  `json:"model_algo"`
+	PredictedSec float64 `json:"predicted_sec"`
+}
+
+// PredictFromPayload is best-effort: callers should tolerate errors and
+// proceed without a prediction rather than dropping the webhook. The
+// most common error is `no_active_model` (returned as a *APIError with
+// StatusCode 409) — this is normal on a fresh install.
+func (c *Client) PredictFromPayload(ctx context.Context, req PredictFromPayloadRequest) (PredictFromPayloadResponse, error) {
+	var resp PredictFromPayloadResponse
+	if err := c.do(ctx, http.MethodPost, "/predict/from-payload", req, &resp); err != nil {
+		return PredictFromPayloadResponse{}, err
+	}
+	return resp, nil
+}
+
 // ExportFiguresRequest matches ml-service POST /export/figures body.
 type ExportFiguresRequest struct {
 	Timestamp string `json:"timestamp"`
 }
 
 type ExportFiguresResponse struct {
-	Directory      string   `json:"directory"`
-	Files          []string `json:"files"`
-	ActiveModelID  *int64   `json:"active_model_id,omitempty"`
+	Directory     string   `json:"directory"`
+	Files         []string `json:"files"`
+	ActiveModelID *int64   `json:"active_model_id,omitempty"`
 }
 
 // ExportFigures triggers the PNG/PDF generation that lives in ml-service

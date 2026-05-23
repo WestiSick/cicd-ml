@@ -95,7 +95,7 @@ func (s *Server) addRepo(w http.ResponseWriter, r *http.Request) {
 		}); err != nil {
 			// Non-fatal — the repo row is saved. User can click "Sync" later.
 			writeJSON(w, http.StatusCreated, map[string]any{
-				"repo": repo,
+				"repo":    repo,
 				"warning": "repo created but auto-sync could not be queued: " + err.Error(),
 			})
 			return
@@ -166,5 +166,127 @@ func (s *Server) syncRepo(w http.ResponseWriter, r *http.Request) {
 		"bg_job_id": job.ID,
 		"repo_id":   id,
 		"message":   "Sync queued — watch the dataset card for progress.",
+	})
+}
+
+// POST /api/repos/{id}/pause
+//
+// Marks the repo as `paused`. The collector skips paused repos on its
+// scheduled tick. Any in-flight bg_job for this repo continues — pause
+// only affects future syncs.
+func (s *Server) pauseRepo(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Repo id must be numeric", "")
+		return
+	}
+	if err := s.db.UpdateRepoStatus(r.Context(), id, "paused"); err != nil {
+		writeError(w, http.StatusInternalServerError, "pause_failed",
+			"Could not pause repo", "Retry.")
+		return
+	}
+	_ = s.db.RecordActivity(r.Context(), "user", "pause_repo", strconv.FormatInt(id, 10),
+		"repository paused", true, nil)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "paused"})
+}
+
+// POST /api/repos/{id}/resume
+//
+// Counterpart to pause. Flips status back to `idle` so the next collector
+// tick picks it up. If the caller wants an immediate sync, follow up with
+// POST /api/repos/{id}/sync.
+func (s *Server) resumeRepo(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Repo id must be numeric", "")
+		return
+	}
+	if err := s.db.UpdateRepoStatus(r.Context(), id, "idle"); err != nil {
+		writeError(w, http.StatusInternalServerError, "resume_failed",
+			"Could not resume repo", "Retry.")
+		return
+	}
+	_ = s.db.RecordActivity(r.Context(), "user", "resume_repo", strconv.FormatInt(id, 10),
+		"repository resumed", true, nil)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "idle"})
+}
+
+// POST /api/repos/{id}/resync
+//
+// Wipes the denormalised counters and queues a fresh collect_history job.
+// Useful when the GitHub API state has drifted from what we have locally
+// (rare — but easier than asking the user to delete-and-readd).
+func (s *Server) resyncRepo(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Repo id must be numeric", "")
+		return
+	}
+	repo, err := s.db.LookupRepoByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "repo_not_found",
+				"No repository with that id", "Reload /datasets.")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "repo_lookup_failed", "", "")
+		return
+	}
+	if err := s.db.ResetRepoCounts(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, "reset_failed",
+			"Could not reset counts", "Retry.")
+		return
+	}
+	job, err := s.db.EnqueueBGJob(r.Context(), store.JobKindCollectHistory, map[string]any{
+		"repo":   repo.Slug(),
+		"months": s.cfg.BootstrapDefaultMonths,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "enqueue_resync_failed",
+			"Counts cleared but resync could not be queued", "Click Sync to retry.")
+		return
+	}
+	_ = s.db.RecordActivity(r.Context(), "user", "resync_repo", repo.Slug(),
+		"repository resync queued", true, map[string]any{"bg_job_id": job.ID})
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"bg_job_id": job.ID, "repo_id": id,
+	})
+}
+
+// DELETE /api/repos/{id}
+//
+// Deletes the repo and all its data (workflow_runs/jobs cascade). Returns
+// a row count so the UI can show "removed vitejs/vite (1342 jobs)" in the
+// toast.
+//
+// Destructive — the UI must double-confirm before calling this.
+func (s *Server) deleteRepo(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "Repo id must be numeric", "")
+		return
+	}
+	// Capture slug first for the activity log.
+	repo, err := s.db.LookupRepoByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "repo_not_found",
+				"No repository with that id", "Reload /datasets.")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "repo_lookup_failed", "", "")
+		return
+	}
+	affected, err := s.db.DeleteRepo(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "delete_failed",
+			"Could not delete repository", "Retry — partial deletes are rolled back.")
+		return
+	}
+	_ = s.db.RecordActivity(r.Context(), "user", "delete_repo", repo.Slug(),
+		"repository deleted", true, map[string]any{"rows_deleted": affected})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"deleted":      true,
+		"rows_deleted": affected,
 	})
 }

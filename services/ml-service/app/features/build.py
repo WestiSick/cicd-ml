@@ -110,6 +110,9 @@ def fit_schema(df: pd.DataFrame) -> FeatureSchema:
     numeric_columns = [
         "steps_count",
         "log_repo_avg_30d",
+        "log_jobname_median_7d",
+        "log_jobname_median_30d",
+        "jobname_runs_30d",
         "hour_of_day",
         "day_of_week",
         "is_weekend",
@@ -171,6 +174,52 @@ def _enrich(df: pd.DataFrame) -> pd.DataFrame:
         out["steps_count"] = pd.to_numeric(out["steps_count"], errors="coerce").fillna(0).astype(int)
     else:
         out["steps_count"] = 0
+
+    # Rolling per-(repo_id, job_name) medians over 7 and 30 days. The
+    # dissertation Chapter 3 cites these as the strongest single-feature
+    # predictors after `log_repo_avg_30d` — same job in the same repo is
+    # the best baseline for how long that job will take next.
+    #
+    # Time-aware rolling keyed on run_created_at; per-(repo, job_name)
+    # because matrix-different jobs in the same workflow can have very
+    # different shapes (e.g. unit-tests vs e2e).
+    #
+    # At predict time the caller can either pass pre-computed values via
+    # `log_jobname_median_7d`/`_30d` columns on the input row, or rely on
+    # the schema-routing fallback (zero) — both work, the former gives
+    # better predictions.
+    needed = {"job_name", "repo_id", "run_created_at", "duration_sec", "job_id"}
+    if needed.issubset(out.columns):
+        ts = pd.to_datetime(out["run_created_at"], utc=True, errors="coerce")
+        work = pd.DataFrame({
+            "job_id":       out["job_id"].values,
+            "repo_id":      out["repo_id"].values,
+            "job_name":     out["job_name"].astype(str).values,
+            "_ts":          ts.values,
+            "duration_sec": pd.to_numeric(out["duration_sec"], errors="coerce").values,
+        }).dropna(subset=["_ts"])
+        # closed='left' would prevent the row's own label from leaking
+        # into its own feature. Pandas API doesn't accept closed='left'
+        # with a time-window directly on a Series — workaround: shift
+        # within group before rolling.
+        work = work.sort_values("_ts").set_index("_ts")
+        grouped = work.groupby(["repo_id", "job_name"], dropna=False)
+        med7  = grouped["duration_sec"].apply(lambda s: s.shift(1).rolling("7D").median())
+        med30 = grouped["duration_sec"].apply(lambda s: s.shift(1).rolling("30D").median())
+        cnt30 = grouped["duration_sec"].apply(lambda s: s.shift(1).rolling("30D").count())
+        rolling = pd.DataFrame({
+            "log_jobname_median_7d":  np.log1p(med7.fillna(0).values),
+            "log_jobname_median_30d": np.log1p(med30.fillna(0).values),
+            "jobname_runs_30d":       cnt30.fillna(0).values,
+        }, index=work["job_id"].values)
+        # Map back into the output frame on job_id (unique).
+        joined = out.merge(rolling, how="left", left_on="job_id", right_index=True)
+        for c in ("log_jobname_median_7d", "log_jobname_median_30d", "jobname_runs_30d"):
+            out[c] = pd.to_numeric(joined[c], errors="coerce").fillna(0).values
+    else:
+        out["log_jobname_median_7d"]  = 0.0
+        out["log_jobname_median_30d"] = 0.0
+        out["jobname_runs_30d"]       = 0
 
     return out
 

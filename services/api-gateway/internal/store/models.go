@@ -3,23 +3,24 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 )
 
 // Model is the surfaced shape of one row in `models`. The frontend's
 // /experiments page reads these directly.
 type Model struct {
-	ID                 int64           `json:"id"`
-	Name               string          `json:"name"`
-	Algo               string          `json:"algo"`
-	Params             json.RawMessage `json:"params"`
-	Metrics            json.RawMessage `json:"metrics"`
-	FeatureImportance  json.RawMessage `json:"feature_importance"`
-	ArtifactPath       *string         `json:"artifact_path,omitempty"`
-	TrainingJobID      *int64          `json:"training_job_id,omitempty"`
-	FeatureVersion     int             `json:"feature_version"`
-	IsActive           bool            `json:"is_active"`
-	TrainedAt          time.Time       `json:"trained_at"`
+	ID                int64           `json:"id"`
+	Name              string          `json:"name"`
+	Algo              string          `json:"algo"`
+	Params            json.RawMessage `json:"params"`
+	Metrics           json.RawMessage `json:"metrics"`
+	FeatureImportance json.RawMessage `json:"feature_importance"`
+	ArtifactPath      *string         `json:"artifact_path,omitempty"`
+	TrainingJobID     *int64          `json:"training_job_id,omitempty"`
+	FeatureVersion    int             `json:"feature_version"`
+	IsActive          bool            `json:"is_active"`
+	TrainedAt         time.Time       `json:"trained_at"`
 }
 
 func (d *DB) ListModels(ctx context.Context) ([]Model, error) {
@@ -108,6 +109,30 @@ func (d *DB) ListPredictedActual(ctx context.Context, modelID int64, limit int) 
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// DeleteModel removes the row and (via FK CASCADE) every prediction the
+// model ever made. Returns the count of predictions deleted so the UI can
+// show "removed XGBoost #42 (1,204 predictions)".
+//
+// Refuses to delete the currently active model — the user must Activate a
+// different one first. The check is a small race (between Get and Delete)
+// but the worst outcome is "no active model" which the UI handles.
+func (d *DB) DeleteModel(ctx context.Context, id int64) (predDeleted int64, err error) {
+	var isActive bool
+	if err := d.Pool.QueryRow(ctx, `SELECT is_active FROM models WHERE id = $1`, id).Scan(&isActive); err != nil {
+		return 0, err
+	}
+	if isActive {
+		return 0, errors.New("cannot delete the currently active model")
+	}
+
+	var preds int64
+	_ = d.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM predictions WHERE model_id = $1`, id).Scan(&preds)
+	if _, err := d.Pool.Exec(ctx, `DELETE FROM models WHERE id = $1`, id); err != nil {
+		return 0, err
+	}
+	return preds, nil
 }
 
 // SetActiveModel atomically marks one model as active and all others as

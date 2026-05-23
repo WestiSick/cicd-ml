@@ -16,21 +16,21 @@ import (
 // resync clears it. Counts are denormalised (updated by collector) so the
 // dataset cards render without a join.
 type Repo struct {
-	ID              int64     `json:"id"`
-	Owner           string    `json:"owner"`
-	Name            string    `json:"name"`
-	GithubID        *int64    `json:"github_id,omitempty"`
-	DefaultBranch   *string   `json:"default_branch,omitempty"`
-	TrackedBranches []string  `json:"tracked_branches"`
-	Status          string    `json:"status"`
+	ID              int64      `json:"id"`
+	Owner           string     `json:"owner"`
+	Name            string     `json:"name"`
+	GithubID        *int64     `json:"github_id,omitempty"`
+	DefaultBranch   *string    `json:"default_branch,omitempty"`
+	TrackedBranches []string   `json:"tracked_branches"`
+	Status          string     `json:"status"`
 	LastSyncedAt    *time.Time `json:"last_synced_at,omitempty"`
 	OldestRunAt     *time.Time `json:"oldest_run_at,omitempty"`
 	NewestRunAt     *time.Time `json:"newest_run_at,omitempty"`
-	RunsCount       int64     `json:"runs_count"`
-	JobsCount       int64     `json:"jobs_count"`
-	LastError       *string   `json:"last_error,omitempty"`
-	IsSeed          bool      `json:"is_seed"`
-	AddedAt         time.Time `json:"added_at"`
+	RunsCount       int64      `json:"runs_count"`
+	JobsCount       int64      `json:"jobs_count"`
+	LastError       *string    `json:"last_error,omitempty"`
+	IsSeed          bool       `json:"is_seed"`
+	AddedAt         time.Time  `json:"added_at"`
 }
 
 func (r Repo) Slug() string { return r.Owner + "/" + r.Name }
@@ -98,6 +98,46 @@ func (d *DB) AddRepo(ctx context.Context, p AddRepoParams) (Repo, error) {
 	`, p.Owner, p.Name, p.TrackedBranches, p.IsSeed)
 
 	return scanRepo(row)
+}
+
+// UpdateRepoStatus flips the status field — used by pause/resume buttons
+// in the UI. The collector treats `paused` repos as no-ops so an in-flight
+// bg_job will finish, but the next sync won't start until the user resumes.
+func (d *DB) UpdateRepoStatus(ctx context.Context, id int64, status string) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE repos SET status = $1 WHERE id = $2`, status, id)
+	return err
+}
+
+// DeleteRepo removes the repository and cascades to its workflow_runs,
+// jobs, predictions, and features (FK ON DELETE CASCADE in the schema).
+// Returns the count of affected rows so the caller can show a toast like
+// "removed vitejs/vite (1342 jobs)".
+func (d *DB) DeleteRepo(ctx context.Context, id int64) (int64, error) {
+	tag, err := d.Pool.Exec(ctx, `DELETE FROM repos WHERE id = $1`, id)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// ResetRepoCounts wipes the denormalised aggregates and timestamps so a
+// fresh resync starts from a known state. Used by POST /repos/{id}/resync.
+// Does NOT delete workflow_runs/jobs — the collector's UPSERTs will refresh
+// stale rows; if the caller wants a true wipe they should DELETE the repo
+// and re-add it.
+func (d *DB) ResetRepoCounts(ctx context.Context, id int64) error {
+	_, err := d.Pool.Exec(ctx, `
+		UPDATE repos
+		SET status = 'idle',
+		    last_error = NULL,
+		    last_synced_at = NULL,
+		    oldest_run_at = NULL,
+		    newest_run_at = NULL,
+		    runs_count = 0,
+		    jobs_count = 0
+		WHERE id = $1
+	`, id)
+	return err
 }
 
 // ListRepos returns all tracked repositories, newest first.

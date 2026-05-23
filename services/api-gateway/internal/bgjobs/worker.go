@@ -5,11 +5,12 @@
 //
 //   - SKIP LOCKED in store.ClaimNextBGJob makes multiple worker goroutines
 //     safe to run in parallel.
+//
 //   - We split the worker pool into two pools by kind class:
 //
-//        io-bound   : collect_history, refresh        (1 worker)
-//        compute    : bootstrap, compute_features,
-//                     train_model, simulate           (3 workers)
+//     io-bound   : collect_history, refresh        (1 worker)
+//     compute    : bootstrap, compute_features,
+//     train_model, simulate           (3 workers)
 //
 //     The split eliminates head-of-line blocking — a rate-limited
 //     collect_history holding its goroutine for 60 min no longer blocks
@@ -159,16 +160,52 @@ func (r *Runner) dispatchOnce(ctx context.Context, p Pool, workerID string) {
 	log.Info().Str("kind", job.Kind).Int64("id", job.ID).Str("worker", workerID).Msg("bg job started")
 	r.broadcast(ctx, job.ID)
 
+	// Cancel-watcher: polls bg_jobs.status for an external Cancel request
+	// (set via POST /api/bg-jobs/{id}/cancel). When detected, cancels the
+	// handler's context; the handler bails out at the next ctx-aware op.
+	jobCtx, cancelJob := context.WithCancel(ctx)
+	defer cancelJob()
+	cancelled := make(chan struct{})
+	go func() {
+		t := time.NewTicker(1 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-jobCtx.Done():
+				return
+			case <-t.C:
+				fresh, err := r.db.GetBGJob(jobCtx, job.ID)
+				if err != nil {
+					continue
+				}
+				if fresh.Status == store.JobStatusCancelled {
+					close(cancelled)
+					cancelJob()
+					return
+				}
+			}
+		}
+	}()
+
 	progress := func(prog, total int, message, logsTail string) {
-		if err := r.db.UpdateBGJobProgress(ctx, job.ID, prog, total, message, logsTail); err != nil {
+		if err := r.db.UpdateBGJobProgress(jobCtx, job.ID, prog, total, message, logsTail); err != nil {
 			log.Warn().Err(err).Msg("update bg job progress")
 		}
-		r.broadcast(ctx, job.ID)
+		r.broadcast(jobCtx, job.ID)
 	}
 
-	if err := handler(ctx, job, progress); err != nil {
-		// ctx cancellation isn't a real failure — log and mark cancelled.
-		if errors.Is(err, context.Canceled) {
+	if err := handler(jobCtx, job, progress); err != nil {
+		// External cancellation (cancel-watcher fired): leave the
+		// "cancelled" status the watcher set, just broadcast.
+		select {
+		case <-cancelled:
+			log.Info().Int64("id", job.ID).Msg("bg job cancelled (user request)")
+			r.broadcast(ctx, job.ID)
+			return
+		default:
+		}
+		// ctx cancellation from outer shutdown.
+		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
 			log.Info().Int64("id", job.ID).Msg("bg job cancelled (ctx done)")
 			_ = r.db.MarkBGJobFailed(ctx, job.ID, "cancelled — shutting down")
 			r.broadcast(ctx, job.ID)

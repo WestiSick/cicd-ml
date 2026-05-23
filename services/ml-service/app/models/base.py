@@ -205,6 +205,16 @@ def _compute_metrics(
         except Exception:
             pass
 
+    # NDCG@k — the dissertation cites this alongside Spearman as the
+    # ranking metric that matters for SJF. Where Spearman scores the whole
+    # ordering uniformly, NDCG@k weights mistakes near the top of the
+    # ranked list more heavily. For SJF that's exactly the property we
+    # care about: getting the SHORTEST jobs in the right order matters
+    # more than fixing the long tail.
+    ndcg10  = _ndcg_at_k(y_test, pred_test, k=10)
+    ndcg50  = _ndcg_at_k(y_test, pred_test, k=50)
+    ndcg100 = _ndcg_at_k(y_test, pred_test, k=100)
+
     return {
         "mae_train_sec": mae_train,
         "mae_test_sec":  mae_test,
@@ -212,4 +222,40 @@ def _compute_metrics(
         "mape_test":     mape_test,
         "r2_test":       r2_test,
         "spearman_test": spearman,
+        "ndcg_at_10":    ndcg10,
+        "ndcg_at_50":    ndcg50,
+        "ndcg_at_100":   ndcg100,
     }
+
+
+def _ndcg_at_k(y_true: np.ndarray, y_pred: np.ndarray, k: int) -> float:
+    """NDCG@k for SJF-style ranking quality.
+
+    Relevance is defined as "shortness" (relevance = -log(1 + duration))
+    so the *shortest* job is the most relevant. The model's predicted
+    order is then evaluated against the ideal short-first ordering.
+
+    Returns NaN when the test set is too small (n < 2) — the standard
+    DCG formula degenerates.
+    """
+    n = min(int(k), len(y_true))
+    if n < 2:
+        return float("nan")
+    # Relevance is decreasing in duration — log-scale dampens the long tail.
+    rel = -np.log1p(np.maximum(y_true, 0.0))
+
+    # DCG@k under the model's ranking: take top-k by predicted *short-first*,
+    # i.e. smallest predicted duration first.
+    order_pred = np.argsort(y_pred)[:n]
+    gains_pred = rel[order_pred]
+    discounts  = 1.0 / np.log2(np.arange(2, n + 2))
+    dcg = float(np.sum(gains_pred * discounts))
+
+    # Ideal DCG@k — same metric but using the true short-first ordering.
+    order_ideal = np.argsort(y_true)[:n]
+    gains_ideal = rel[order_ideal]
+    idcg = float(np.sum(gains_ideal * discounts))
+
+    if idcg == 0.0 or not np.isfinite(idcg):
+        return float("nan")
+    return dcg / idcg
