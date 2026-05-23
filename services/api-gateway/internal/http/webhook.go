@@ -48,13 +48,16 @@ func (s *Server) handleGithubWebhook(w http.ResponseWriter, r *http.Request) {
 			FullName string `json:"full_name"`
 		} `json:"repository"`
 		WorkflowRun struct {
-			ID         int64  `json:"id"`
-			Status     string `json:"status"`
-			Conclusion string `json:"conclusion"`
-			HeadBranch string `json:"head_branch"`
-			HeadSHA    string `json:"head_sha"`
-			Name       string `json:"name"`
-			Event      string `json:"event"`
+			ID           int64      `json:"id"`
+			Status       string     `json:"status"`
+			Conclusion   string     `json:"conclusion"`
+			HeadBranch   string     `json:"head_branch"`
+			HeadSHA      string     `json:"head_sha"`
+			Name         string     `json:"name"`
+			Event        string     `json:"event"`
+			RunStartedAt *time.Time `json:"run_started_at"`
+			UpdatedAt    *time.Time `json:"updated_at"`
+			CreatedAt    *time.Time `json:"created_at"`
 		} `json:"workflow_run"`
 	}
 	_ = json.NewDecoder(bytes.NewReader(body)).Decode(&head)
@@ -108,12 +111,49 @@ func (s *Server) handleGithubWebhook(w http.ResponseWriter, r *http.Request) {
 				payload["predicted_sec"] = pred.PredictedSec
 				payload["model_id"] = pred.ModelID
 				payload["model_algo"] = pred.ModelAlgo
+				// Stash the prediction so the matching `completed` event a
+				// few seconds-to-minutes later can compute δ-error without
+				// a DB round-trip. Keyed by (run_id, repo) — the same pair
+				// that arrives on every workflow_run.* event.
+				s.recentPredictions.Remember(head.Repository.FullName, head.WorkflowRun.ID, pred.PredictedSec, pred.ModelID, pred.ModelAlgo)
 			} else if mlErr, ok := err.(*ml.APIError); !ok || mlErr.Code != "no_active_model" {
 				// Log unexpected errors. "no_active_model" is the normal
 				// fresh-install case and not worth warning about.
 				log.Warn().Err(err).Str("repo", head.Repository.FullName).Msg("webhook predict")
 			}
 		}
+
+		// On `completed` we compute the actual workflow-level duration from
+		// run_started_at → updated_at (both come on the webhook payload, no
+		// extra GitHub API call). If we remember an earlier prediction for
+		// the same run_id, we attach predicted_sec + delta_pct so the
+		// dashboard can show the live ROC of model accuracy.
+		//
+		// Why workflow-level and not job-level: jobs require a follow-up
+		// GET /actions/runs/{id}/jobs call (extra rate-limit cost + 1–2s
+		// latency added to the webhook ack). Workflow-level is "close
+		// enough" for the live demo; the collector still backfills job-level
+		// data within seconds for the /datasets and /experiments scatter.
+		if head.WorkflowRun.Status == "completed" {
+			if head.WorkflowRun.RunStartedAt != nil && head.WorkflowRun.UpdatedAt != nil {
+				actualSec := head.WorkflowRun.UpdatedAt.Sub(*head.WorkflowRun.RunStartedAt).Seconds()
+				if actualSec > 0 {
+					payload["actual_sec"] = actualSec
+					if remembered, ok := s.recentPredictions.Get(head.Repository.FullName, head.WorkflowRun.ID); ok {
+						payload["predicted_sec"] = remembered.PredictedSec
+						payload["model_id"] = remembered.ModelID
+						payload["model_algo"] = remembered.ModelAlgo
+						// Δ as % of actual (signed). Negative = model
+						// over-predicted; positive = under-predicted.
+						if actualSec > 0 {
+							payload["delta_pct"] = 100.0 * (remembered.PredictedSec - actualSec) / actualSec
+						}
+						s.recentPredictions.Forget(head.Repository.FullName, head.WorkflowRun.ID)
+					}
+				}
+			}
+		}
+
 		// Broadcast on /ws/queue so /dashboard's live feed shows the event
 		// even before the run is fully persisted. The collector picks up
 		// the same run via its normal sync path within seconds.

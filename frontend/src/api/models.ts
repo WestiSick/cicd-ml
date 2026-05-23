@@ -45,6 +45,30 @@ export async function startTraining(req: StartTrainingRequest): Promise<StartTra
   });
 }
 
+export type CVRequest = {
+  algo: string;
+  params?: Record<string, unknown>;
+  repo_ids?: number[];
+  n_splits?: number;
+};
+
+export type CVResponse = {
+  algo: string;
+  n_splits: number;
+  fold_metrics: Array<Record<string, number>>;
+  mean_metrics: Record<string, number>;
+  std_metrics:  Record<string, number>;
+  total_train_size: number;
+  total_test_size:  number;
+};
+
+export async function crossValidate(req: CVRequest): Promise<CVResponse> {
+  return api<CVResponse>("/api/training/cv", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
 export async function deleteModel(id: number): Promise<{ predictions_deleted: number }> {
   return api(`/api/models/${id}`, { method: "DELETE" });
 }

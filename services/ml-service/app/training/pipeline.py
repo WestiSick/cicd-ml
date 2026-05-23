@@ -19,7 +19,8 @@ from typing import Any
 
 import numpy as np
 
-from ..features.build import FEATURE_VERSION, fit_schema, time_based_split, transform
+from ..features.build import FEATURE_VERSION, fit_schema, time_based_cv, time_based_split, transform
+from ..models.base import _compute_metrics
 from ..models.lgbm import factory_by_algo
 from ..storage import db
 
@@ -164,3 +165,93 @@ class InsufficientDataError(Exception):
     400 by the HTTP handler so the UI surfaces an actionable message
     ('collect more data') rather than a 500."""
     pass
+
+
+@dataclass
+class CVOutcome:
+    """Per-fold metrics + summary across all folds. The summary is what
+    the dissertation Chapter 3 reports — point estimates from a single
+    train/test split are misleading without CV bounds."""
+    algo: str
+    n_splits: int
+    fold_metrics: list[dict[str, float]]      # one dict per fold
+    mean_metrics: dict[str, float]
+    std_metrics:  dict[str, float]
+    total_train_size: int
+    total_test_size:  int
+
+
+def cross_validate(dsn: str, req: TrainRequest, n_splits: int = 5) -> CVOutcome:
+    """Walk-forward cross-validation for one algorithm.
+
+    Each fold fits a fresh model on the prefix of the time-sorted dataset
+    and evaluates on the next slice — see `time_based_cv` for the exact
+    boundaries. Per-fold metrics are computed with the same canonical
+    `_compute_metrics` used by single-split training, so CV and one-shot
+    numbers are directly comparable.
+
+    Does NOT persist a model row or predictions: this is an *evaluation*
+    call, not a training one. The caller (`POST /train/cv`) returns the
+    summary table; if the user likes the numbers they then click "Train"
+    to fit the production model with `train_one`.
+    """
+    df = db.load_jobs_df(dsn, repo_ids=req.repo_ids, since=req.since)
+    if len(df) < 25:
+        raise InsufficientDataError(
+            f"only {len(df)} usable jobs — at least 25 needed for {n_splits}-fold CV."
+        )
+
+    folds = time_based_cv(df, n_splits=n_splits)
+    per_fold: list[dict[str, float]] = []
+    total_train = total_test = 0
+
+    for fi, (train_idx, test_idx) in enumerate(folds):
+        train_df = df.loc[train_idx].copy()
+        test_df  = df.loc[test_idx].copy()
+        # Schema fitted on this fold's train slice only — CV-correct.
+        schema = fit_schema(train_df)
+        X_tr, names, y_tr = transform(train_df, schema)
+        X_te, _,     y_te = transform(test_df, schema)
+        if y_tr is None or y_te is None:
+            log.warning("fold %d: missing target, skipping", fi)
+            continue
+        model = factory_by_algo(req.algo)
+        # CV-time: no per-iteration streaming — folds are not interesting
+        # individually for the live UI; we report only the summary.
+        params = dict(req.params or {})
+        params.pop("_streaming_training_job_id", None)
+        model.fit(X_tr, y_tr, X_te, y_te, params, names, schema)
+
+        pred_tr_log = model.estimator.predict(X_tr)
+        pred_te_log = model.estimator.predict(X_te)
+        m = _compute_metrics(y_tr, pred_tr_log, y_te, pred_te_log)
+        per_fold.append(m)
+        total_train += len(train_idx)
+        total_test  += len(test_idx)
+
+    if not per_fold:
+        raise InsufficientDataError("every CV fold failed — dataset too sparse")
+
+    # mean and std across folds for each metric. NaNs are skipped per
+    # metric so a single failing fold doesn't poison the summary.
+    keys = sorted({k for fold in per_fold for k in fold.keys()})
+    mean: dict[str, float] = {}
+    std:  dict[str, float] = {}
+    for k in keys:
+        vals = [float(f[k]) for f in per_fold if k in f and np.isfinite(f[k])]
+        if not vals:
+            mean[k] = float("nan")
+            std[k]  = float("nan")
+        else:
+            arr = np.array(vals, dtype=float)
+            mean[k] = float(arr.mean())
+            std[k]  = float(arr.std(ddof=0))
+    return CVOutcome(
+        algo=req.algo,
+        n_splits=len(per_fold),
+        fold_metrics=per_fold,
+        mean_metrics=mean,
+        std_metrics=std,
+        total_train_size=total_train,
+        total_test_size=total_test,
+    )

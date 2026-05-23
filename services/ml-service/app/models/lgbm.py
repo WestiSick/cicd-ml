@@ -110,6 +110,7 @@ def factory_by_algo(algo: str):
     class from a string. Kept here so all algos register through one map.
     """
     from .linear import LinearModel
+    from .lstm import LSTMModel
     from .mlp import MLPModel
     from .rf import RandomForestModel
     from .xgb import XGBoostModel
@@ -119,6 +120,7 @@ def factory_by_algo(algo: str):
         "xgboost":  XGBoostModel,
         "lightgbm": LightGBMModel,
         "mlp":      MLPModel,
+        "lstm":     LSTMModel,
     }
     cls = table.get(algo)
     if cls is None:

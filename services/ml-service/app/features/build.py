@@ -113,6 +113,15 @@ def fit_schema(df: pd.DataFrame) -> FeatureSchema:
         "log_jobname_median_7d",
         "log_jobname_median_30d",
         "jobname_runs_30d",
+        "log_author_p50_30d",
+        "log_author_p90_30d",
+        "author_commits_30d",
+        # Commit diff features — populated by the collector for SHAs it
+        # has fetched details for; missing rows fall back to 0 via NaN
+        # → 0 coercion in transform.
+        "log_commit_files_changed",
+        "log_commit_additions",
+        "log_commit_deletions",
         "hour_of_day",
         "day_of_week",
         "is_weekend",
@@ -221,6 +230,57 @@ def _enrich(df: pd.DataFrame) -> pd.DataFrame:
         out["log_jobname_median_30d"] = 0.0
         out["jobname_runs_30d"]       = 0
 
+    # Author historical stats — rolling 30d p50/p90 of duration plus
+    # commit-count per author. The dissertation Chapter 3 lists these
+    # alongside the job_name rolling features as the second-strongest
+    # cluster of signals after log_repo_avg_30d. Different authors trigger
+    # different shapes (e.g. core-team commits hit cached pipelines;
+    # bot/dependabot commits trigger full rebuilds).
+    #
+    # Same shift+rolling pattern as job_name to avoid same-row leakage.
+    author_needed = {"actor", "run_created_at", "duration_sec", "job_id"}
+    if author_needed.issubset(out.columns):
+        ts = pd.to_datetime(out["run_created_at"], utc=True, errors="coerce")
+        work = pd.DataFrame({
+            "job_id":       out["job_id"].values,
+            "actor":        out["actor"].astype(str).values,
+            "_ts":          ts.values,
+            "duration_sec": pd.to_numeric(out["duration_sec"], errors="coerce").values,
+        }).dropna(subset=["_ts"])
+        work = work.sort_values("_ts").set_index("_ts")
+        grouped = work.groupby("actor", dropna=False)
+        p50 = grouped["duration_sec"].apply(lambda s: s.shift(1).rolling("30D").median())
+        p90 = grouped["duration_sec"].apply(lambda s: s.shift(1).rolling("30D").quantile(0.9))
+        cnt = grouped["duration_sec"].apply(lambda s: s.shift(1).rolling("30D").count())
+        rolling = pd.DataFrame({
+            "log_author_p50_30d": np.log1p(p50.fillna(0).values),
+            "log_author_p90_30d": np.log1p(p90.fillna(0).values),
+            "author_commits_30d": cnt.fillna(0).values,
+        }, index=work["job_id"].values)
+        joined = out.merge(rolling, how="left", left_on="job_id", right_index=True)
+        for c in ("log_author_p50_30d", "log_author_p90_30d", "author_commits_30d"):
+            out[c] = pd.to_numeric(joined[c], errors="coerce").fillna(0).values
+    else:
+        out["log_author_p50_30d"] = 0.0
+        out["log_author_p90_30d"] = 0.0
+        out["author_commits_30d"] = 0
+
+    # Commit diff features — log-transformed because both `additions`
+    # and `deletions` have heavy right tails (one mega-refactor PR with
+    # 50k LOC dominates). log1p compresses the tail without hiding
+    # ordinary commits in the [0, 1k] range.
+    for src, dst in (
+        ("commit_files_changed", "log_commit_files_changed"),
+        ("commit_additions",     "log_commit_additions"),
+        ("commit_deletions",     "log_commit_deletions"),
+    ):
+        if src in out.columns:
+            out[dst] = np.log1p(
+                pd.to_numeric(out[src], errors="coerce").fillna(0).clip(lower=0).astype(float)
+            )
+        else:
+            out[dst] = 0.0
+
     return out
 
 
@@ -278,6 +338,54 @@ def inverse_target(y_log: np.ndarray) -> np.ndarray:
 
 
 # ---- Splits ------------------------------------------------------------
+
+
+def time_based_cv(df: pd.DataFrame, n_splits: int = 5) -> list[tuple[pd.Index, pd.Index]]:
+    """Walk-forward time-series cross-validation.
+
+    The dataset is sorted by `run_created_at` and divided into n+1 contiguous
+    chunks. For fold k (1..n) the training set is everything before the k-th
+    boundary, and the test set is the k-th chunk:
+
+        fold 1: train = [0, t1),   test = [t1, t2)
+        fold 2: train = [0, t2),   test = [t2, t3)
+        ...
+        fold n: train = [0, tn),   test = [tn, T]
+
+    This is the standard for time-series problems and matches what the
+    dissertation Chapter 3 cites — random k-fold would leak future data
+    into training. Each fold's test slice is the same width on average.
+
+    Returns a list of (train_idx, test_idx) pairs. Falls back to a single
+    fold if the dataset is too small to slice meaningfully.
+    """
+    if "run_created_at" not in df.columns or len(df) < (n_splits + 1) * 5:
+        train_idx, test_idx = time_based_split(df, train_frac=0.8)
+        return [(train_idx, test_idx)]
+
+    ts = pd.to_datetime(df["run_created_at"], utc=True, errors="coerce")
+    # Quantile boundaries — equal-frequency chunks rather than equal-time,
+    # so a quiet week doesn't get tiny chunks while a busy week gets huge.
+    qs = [(k + 1) / (n_splits + 1) for k in range(n_splits + 1)]
+    cutoffs = [ts.quantile(q) for q in qs]
+    sorted_idx = ts.sort_values().index
+
+    folds: list[tuple[pd.Index, pd.Index]] = []
+    for k in range(n_splits):
+        lo, hi = cutoffs[k], cutoffs[k + 1]
+        train_mask = ts <= lo
+        test_mask = (ts > lo) & (ts <= hi)
+        train_idx = df.index[train_mask]
+        test_idx = df.index[test_mask]
+        if len(train_idx) >= 5 and len(test_idx) >= 1:
+            folds.append((train_idx, test_idx))
+    if not folds:
+        # Degenerate fallback so callers always get at least one fold.
+        return [time_based_split(df, 0.8)]
+    # Tag the unused sorted_idx so linters don't flag — kept as a
+    # debugging hook for visualising fold boundaries on a timeline.
+    _ = sorted_idx
+    return folds
 
 
 def time_based_split(df: pd.DataFrame, train_frac: float = 0.8) -> tuple[pd.Index, pd.Index]:

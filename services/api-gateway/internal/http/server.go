@@ -39,13 +39,14 @@ import (
 )
 
 type Server struct {
-	cfg       config.Config
-	db        *store.DB
-	hub       *ws.Hub
-	mlClient  *ml.Client
-	orches    *bootstrap.Orchestrator
-	installer *gh.Installer // GitHub webhook installer — shared across handlers
-	r         chi.Router
+	cfg               config.Config
+	db                *store.DB
+	hub               *ws.Hub
+	mlClient          *ml.Client
+	orches            *bootstrap.Orchestrator
+	installer         *gh.Installer // GitHub webhook installer — shared across handlers
+	recentPredictions *predictionCache
+	r                 chi.Router
 }
 
 func NewServer(cfg config.Config, db *store.DB, hub *ws.Hub, mlClient *ml.Client) *Server {
@@ -63,6 +64,9 @@ func NewServer(cfg config.Config, db *store.DB, hub *ws.Hub, mlClient *ml.Client
 		mlClient:  mlClient,
 		orches:    bootstrap.NewOrchestrator(db).WithInstaller(installerAdapter{inner: installer}),
 		installer: installer,
+		// 30-minute TTL covers the longest typical CI workflow_run with
+		// margin. 1k entries is generous for single-user scale.
+		recentPredictions: newPredictionCache(30*time.Minute, 1000),
 	}
 	s.r = s.buildRouter()
 	return s
@@ -140,6 +144,7 @@ func (s *Server) buildRouter() chi.Router {
 		// Training — POST enqueues a train_model bg_job; the worker
 		// proxies to ml-service. GET reads back from bg_jobs.
 		r.Post("/training", s.startTraining)
+		r.Post("/training/cv", s.crossValidate)
 		r.Get("/training/{id}", s.getBGJob) // reuse bg_jobs handler
 		r.Get("/training/{id}/metrics", s.listTrainingMetrics)
 

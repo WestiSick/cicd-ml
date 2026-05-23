@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/PageHeader";
@@ -9,7 +9,7 @@ import { Button } from "@/components/Button";
 import { StatusChip } from "@/components/StatusChip";
 import { EmptyState } from "@/components/EmptyState";
 import { ApiError } from "@/api/client";
-import { activateModel, deleteModel, listModels, modelDownloadURL, startTraining, type ModelRow } from "@/api/models";
+import { activateModel, crossValidate, deleteModel, listModels, modelDownloadURL, startTraining, type CVResponse, type ModelRow } from "@/api/models";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { listBGJobs, type BGJob } from "@/api/bgjobs";
 import { exportThesisPack } from "@/api/thesisExport";
@@ -41,7 +41,36 @@ const ALGORITHMS: { id: string; labelKey: TranslationKey }[] = [
 export function Experiments() {
   const t = useT();
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const modelsQ = useQuery({ queryKey: ["models"], queryFn: listModels, refetchInterval: 5_000 });
+  // Selection set drives the comparison action. Capped at 5 in the UI
+  // because the ModelCompare page slices to 5 anyway — better to surface
+  // the limit at click time than silently truncate.
+  const [comparison, setComparison] = useState<Set<number>>(new Set());
+
+  function toggleCompare(id: number) {
+    setComparison((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else {
+        if (next.size >= 5) {
+          toast.error(t("exp.compare.too_many"));
+          return cur;
+        }
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function openComparison() {
+    if (comparison.size < 2) {
+      toast.error(t("exp.compare.select"));
+      return;
+    }
+    const ids = Array.from(comparison).join(",");
+    navigate(`/experiments/compare?ids=${ids}`);
+  }
   const trainingsQ = useQuery({
     queryKey: ["bg-jobs", "train_model"],
     queryFn: () => listBGJobs({ limit: 20 }),
@@ -51,6 +80,8 @@ export function Experiments() {
   const [algo, setAlgo] = useState("xgboost");
   const [activate, setActivate] = useState(true);
   const [optunaTrials, setOptunaTrials] = useState(0); // 0 = off
+  const [cvSplits, setCvSplits] = useState(5);
+  const [cvResult, setCvResult] = useState<CVResponse | null>(null);
 
   // Live WS push — refresh queries whenever bg_jobs broadcast a change.
   useWebSocket("/ws/bg-jobs", () => {
@@ -93,6 +124,22 @@ export function Experiments() {
     [trainingsQ.data]
   );
 
+  const cv = useMutation({
+    mutationFn: async () => {
+      const started = Date.now();
+      const r = await crossValidate({ algo, n_splits: cvSplits });
+      return { r, elapsedSec: Math.round((Date.now() - started) / 1000) };
+    },
+    onSuccess: ({ r, elapsedSec }) => {
+      setCvResult(r);
+      toast.success(t("exp.cv.toast_done", { n: r.n_splits, sec: elapsedSec }));
+    },
+    onError: (err: unknown) => {
+      if (err instanceof ApiError) toast.error(err.message, { description: err.userAction });
+      else toast.error("CV failed");
+    },
+  });
+
   const exportPack = useMutation({
     mutationFn: exportThesisPack,
     onSuccess: (r) => {
@@ -113,6 +160,11 @@ export function Experiments() {
         subtitle={t("exp.subtitle")}
         actions={
           <>
+            {comparison.size > 0 && (
+              <Button variant="ghost" onClick={openComparison}>
+                {t("exp.compare_button", { n: comparison.size })}
+              </Button>
+            )}
             <Button variant="ghost" onClick={() => exportPack.mutate()} loading={exportPack.isPending}>
               {t("exp.export_pack")}
             </Button>
@@ -146,6 +198,31 @@ export function Experiments() {
             />
             <span>{t("exp.activate_on_finish")}</span>
           </label>
+        </div>
+
+        {/* Walk-forward cross-validation — synchronous, no model persisted */}
+        <div style={{ marginTop: "var(--s-4)", paddingTop: "var(--s-3)", borderTop: "1px solid var(--border-subtle)" }}>
+          <div className="caps" style={{ color: "var(--text-tertiary)", marginBottom: "var(--s-2)" }}>
+            {t("exp.cv.label")}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", alignItems: "center" }}>
+            {[3, 5, 8].map((n) => (
+              <button key={n} onClick={() => setCvSplits(n)} style={pillStyle(cvSplits === n)}>
+                {t("exp.cv.splits", { n })}
+              </button>
+            ))}
+            <Button variant="ghost" onClick={() => cv.mutate()} loading={cv.isPending}>
+              {cv.isPending ? t("exp.cv.running") : t("exp.cv.button")}
+            </Button>
+            <span style={{ marginLeft: "var(--s-3)", color: "var(--text-tertiary)", fontSize: "var(--fs-12)" }}>
+              {t("exp.cv.hint")}
+            </span>
+          </div>
+          {cvResult && (
+            <div style={{ marginTop: "var(--s-3)" }}>
+              <CVResultTable cv={cvResult} />
+            </div>
+          )}
         </div>
 
         {/* Optuna hyperparameter search */}
@@ -182,6 +259,7 @@ export function Experiments() {
           <table style={tableStyle}>
             <thead>
               <tr>
+                <Th>{" "}</Th>
                 <Th>{t("exp.col.id")}</Th>
                 <Th>{t("exp.col.algo")}</Th>
                 <Th>{t("exp.col.name")}</Th>
@@ -199,6 +277,8 @@ export function Experiments() {
                 <ModelRowEl
                   key={m.id}
                   m={m}
+                  selected={comparison.has(m.id)}
+                  onToggleSelect={() => toggleCompare(m.id)}
                   onActivate={() => activate1.mutate(m.id)}
                   onDeleted={() => qc.invalidateQueries({ queryKey: ["models"] })}
                 />
@@ -224,10 +304,14 @@ export function Experiments() {
 
 function ModelRowEl({
   m,
+  selected,
+  onToggleSelect,
   onActivate,
   onDeleted,
 }: {
   m: ModelRow;
+  selected: boolean;
+  onToggleSelect: () => void;
   onActivate: () => void;
   onDeleted: () => void;
 }) {
@@ -258,6 +342,15 @@ function ModelRowEl({
   };
   return (
     <tr style={{ borderTop: "1px solid var(--border-subtle)" }}>
+      <Td>
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSelect}
+          style={{ accentColor: "var(--accent)", cursor: "pointer" }}
+          title="add to comparison"
+        />
+      </Td>
       <Td mono>
         {m.training_job_id ? (
           <Link
@@ -386,5 +479,57 @@ function Td({ children, mono, small }: { children: React.ReactNode; mono?: boole
     <td className={mono ? "mono" : undefined} style={{ padding: "var(--s-2) var(--s-1)", fontSize: small ? "var(--fs-12)" : undefined }}>
       {children}
     </td>
+  );
+}
+
+/* CVResultTable — renders the walk-forward CV summary.
+ *
+ * Layout: one column per fold (limited to first 8 to keep horizontal scroll
+ * tame) plus mean and std columns. Rows are the canonical metrics in the
+ * same order as the comparison page so the user's eye doesn't have to
+ * re-adapt when flipping between pages. */
+function CVResultTable({ cv }: { cv: CVResponse }) {
+  const t = useT();
+  const keys = [
+    { k: "mae_test_sec",  label: "MAE (s)", digits: 1 },
+    { k: "rmse_test_sec", label: "RMSE (s)", digits: 1 },
+    { k: "mape_test",     label: "MAPE", digits: 3 },
+    { k: "r2_test",       label: "R²", digits: 3 },
+    { k: "spearman_test", label: "Spearman", digits: 3 },
+    { k: "ndcg_at_10",    label: "NDCG@10", digits: 3 },
+  ];
+  const fmt = (v: number | undefined, d: number) =>
+    typeof v === "number" && isFinite(v) ? v.toFixed(d) : "—";
+
+  return (
+    <div>
+      <div className="caps" style={{ color: "var(--text-tertiary)", marginBottom: "var(--s-2)", fontSize: 11 }}>
+        {t("exp.cv.title", { algo: cv.algo, n: cv.n_splits })}
+      </div>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--fs-12)" }}>
+        <thead>
+          <tr>
+            <Th>metric</Th>
+            {cv.fold_metrics.slice(0, 8).map((_, i) => (
+              <Th key={i}>{t("exp.cv.fold")} {i + 1}</Th>
+            ))}
+            <Th>{t("exp.cv.mean")}</Th>
+            <Th>±{t("exp.cv.std")}</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {keys.map((row) => (
+            <tr key={row.k} style={{ borderTop: "1px solid var(--border-subtle)" }}>
+              <Td mono>{row.label}</Td>
+              {cv.fold_metrics.slice(0, 8).map((f, i) => (
+                <Td key={i} mono small>{fmt(f[row.k], row.digits)}</Td>
+              ))}
+              <Td mono><strong>{fmt(cv.mean_metrics[row.k], row.digits)}</strong></Td>
+              <Td mono small>{fmt(cv.std_metrics[row.k], row.digits)}</Td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

@@ -33,7 +33,7 @@ type Syncer struct {
 type RunInput struct {
 	RepoOwner string
 	RepoName  string
-	Months    int           // 3, 6 or 12 — drives the cutoff
+	Months    int // 3, 6 or 12 — drives the cutoff
 }
 
 // Progress is the callback the syncer uses to report progress. Matches the
@@ -112,6 +112,32 @@ func (s *Syncer) Run(ctx context.Context, in RunInput, progress Progress) error 
 				return fmt.Errorf("upsert run %d: %w", r.ID, err)
 			}
 
+			// Commit details — cheap to skip if we already have this SHA
+			// (matrix builds → many workflow_runs share head_sha). Errors
+			// are non-fatal: feature engineering tolerates NULLs in the
+			// commit fields.
+			if r.HeadSHA != "" {
+				if exists, _ := s.DB.CommitExists(ctx, r.HeadSHA); !exists {
+					c, rl3, cerr := s.Client.GetCommit(ctx, owner, name, r.HeadSHA)
+					if rlErr := s.handleRateLimit(ctx, cerr, rl3, progress); rlErr != nil {
+						return rlErr
+					}
+					if cerr == nil {
+						committedAt := c.CommitDetail.Author.Date
+						_ = s.DB.UpsertCommit(ctx, store.UpsertCommitParams{
+							SHA:          c.SHA,
+							RepoID:       repo.ID,
+							Author:       c.Author.Login,
+							Message:      truncateMessage(c.CommitDetail.Message, 280),
+							FilesChanged: len(c.Files),
+							Additions:    c.Stats.Additions,
+							Deletions:    c.Stats.Deletions,
+							CommittedAt:  zeroToNil(committedAt),
+						})
+					}
+				}
+			}
+
 			// Only fetch jobs for runs that have completed — in-flight runs
 			// don't yet have meaningful durations. This also cuts API calls.
 			if r.Status == "completed" {
@@ -164,6 +190,27 @@ func (s *Syncer) Run(ctx context.Context, in RunInput, progress Progress) error 
 
 	progress(totalCounted, totalCounted, fmt.Sprintf("%s/%s: sync complete", owner, name), "")
 	return nil
+}
+
+// truncateMessage caps the commit message so the row stays slim. We
+// keep the first line plus a trailing ellipsis, since the predictor
+// uses counts not message text. 280 chars matches a Twitter-era
+// rule-of-thumb for "summary length" — enough for diagnostics.
+func truncateMessage(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
+}
+
+// zeroToNil maps a zero time.Time to nil so the DB stores NULL instead
+// of the unix epoch. The pgx layer's UpsertCommit already does NULL for
+// nil; this saves callers a four-line if/else at every call site.
+func zeroToNil(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }
 
 // handleRateLimit centralises the 403/429 retry policy. If the response

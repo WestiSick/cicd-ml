@@ -29,6 +29,11 @@ services:
       - "8000:8000"
     volumes:
       - ./services/ml-service:/app
+      # EDA notebook + figure-generation script — mounted so
+      # `make eda-figures` and `jupyter nbconvert` inside the container
+      # can read them. Read-only so notebook execution can't accidentally
+      # overwrite the canonical .ipynb in the repo.
+      - ./ml/notebooks:/ml/notebooks:ro
 
   frontend:
     build:

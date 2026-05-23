@@ -1,9 +1,9 @@
 // Package github is a tiny client for the three endpoints the collector
 // actually uses:
 //
-//   GET /repos/{owner}/{repo}
-//   GET /repos/{owner}/{repo}/actions/runs?per_page=100&page=N
-//   GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs
+//	GET /repos/{owner}/{repo}
+//	GET /repos/{owner}/{repo}/actions/runs?per_page=100&page=N
+//	GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs
 //
 // We do NOT use google/go-github — its build pulls dozens of MB of types
 // for every API surface, almost none of which we need. The endpoints we
@@ -57,13 +57,13 @@ type Repo struct {
 // WorkflowRun mirrors the fields used downstream. JSON tags align with
 // the GitHub API so json.Unmarshal Just Works.
 type WorkflowRun struct {
-	ID         int64     `json:"id"`
-	Name       string    `json:"name"`
-	HeadBranch string    `json:"head_branch"`
-	HeadSHA    string    `json:"head_sha"`
-	Event      string    `json:"event"`
-	Status     string    `json:"status"`
-	Conclusion string    `json:"conclusion"`
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	HeadBranch string `json:"head_branch"`
+	HeadSHA    string `json:"head_sha"`
+	Event      string `json:"event"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
 	Actor      struct {
 		Login string `json:"login"`
 	} `json:"actor"`
@@ -83,17 +83,17 @@ type WorkflowRunsPage struct {
 // `started_at` / `completed_at` (no `_sec` suffix on duration — derive
 // it from the deltas).
 type Job struct {
-	ID           int64      `json:"id"`
-	RunID        int64      `json:"run_id"`
-	Name         string     `json:"name"`
-	Status       string     `json:"status"`
-	Conclusion   string     `json:"conclusion"`
-	StartedAt    *time.Time `json:"started_at"`
-	CompletedAt  *time.Time `json:"completed_at"`
-	RunnerName   string     `json:"runner_name"`
-	RunnerGroup  string     `json:"runner_group_name"`
-	Labels       []string   `json:"labels"`
-	Steps        []struct{} `json:"steps"`
+	ID          int64      `json:"id"`
+	RunID       int64      `json:"run_id"`
+	Name        string     `json:"name"`
+	Status      string     `json:"status"`
+	Conclusion  string     `json:"conclusion"`
+	StartedAt   *time.Time `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at"`
+	RunnerName  string     `json:"runner_name"`
+	RunnerGroup string     `json:"runner_group_name"`
+	Labels      []string   `json:"labels"`
+	Steps       []struct{} `json:"steps"`
 }
 
 type JobsPage struct {
@@ -220,6 +220,50 @@ func (c *Client) ListRunJobs(ctx context.Context, owner, name string, runID int6
 		}
 	}
 	return all, rate, nil
+}
+
+// Commit is the slim view of /repos/{owner}/{repo}/commits/{sha} we use.
+// We only need diff stats and author — message and tree are dropped to
+// keep payloads small in tests.
+type Commit struct {
+	SHA    string `json:"sha"`
+	Author struct {
+		Login string `json:"login"`
+	} `json:"author"`
+	CommitDetail struct {
+		Author struct {
+			Name string    `json:"name"`
+			Date time.Time `json:"date"`
+		} `json:"author"`
+		Message string `json:"message"`
+	} `json:"commit"`
+	Stats struct {
+		Total     int `json:"total"`
+		Additions int `json:"additions"`
+		Deletions int `json:"deletions"`
+	} `json:"stats"`
+	Files []CommitFile `json:"files"`
+}
+
+type CommitFile struct {
+	Filename  string `json:"filename"`
+	Status    string `json:"status"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+	Changes   int    `json:"changes"`
+}
+
+// GetCommit fetches diff stats + file list for one commit. Used to
+// populate `commits` so feature engineering can use additions/deletions/
+// files_changed as predictors of CI duration.
+//
+// Costs one rate-limit token per call — the collector dedupes by SHA
+// (we never refetch a commit we already have) so on incremental syncs
+// this is cheap.
+func (c *Client) GetCommit(ctx context.Context, owner, name, sha string) (Commit, RateLimit, error) {
+	var out Commit
+	rl, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s/commits/%s", owner, name, sha), &out)
+	return out, rl, err
 }
 
 // Sentinel error to differentiate "not found" cleanly at call sites.

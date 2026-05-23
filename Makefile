@@ -1,4 +1,4 @@
-.PHONY: help up down dev prod logs ps psql redis-cli build test lint clean snapshot restore-snapshot thesis-figures thesis-pack
+.PHONY: help up down dev prod logs ps psql redis-cli build test lint clean snapshot restore-snapshot thesis-figures thesis-pack eda-figures
 
 help:
 	@echo "cicd-ml — make targets"
@@ -16,6 +16,7 @@ help:
 	@echo "  make restore-snapshot  Restore DB from db/seed/snapshot.sql.gz"
 	@echo "  make thesis-figures    Regenerate PNG/PDF figures for the dissertation"
 	@echo "  make thesis-pack       Export the full thesis pack (CSV + figures) into ./docs/thesis"
+	@echo "  make eda-figures       Render Chapter-3 EDA figures from ml/notebooks/generate_eda_figures.py"
 	@echo "  make clean             Remove containers and volumes (DESTRUCTIVE)"
 
 # Compose file selection
@@ -96,6 +97,13 @@ thesis-figures:
 # Full thesis pack is alias for thesis-figures — the export endpoint
 # already writes CSV files alongside the PNG/PDF.
 thesis-pack: thesis-figures
+
+# Render the Chapter-3 EDA figures (distribution, top jobs, branch class,
+# hour-of-day, correlation matrix) directly from the live database. Output
+# lands in the shared thesis volume so the manuscript picks them up.
+eda-figures:
+	mkdir -p ./ml/notebooks
+	docker compose $(DEV_COMPOSE) exec -T ml python /ml/notebooks/generate_eda_figures.py
 
 clean:
 	docker compose $(DEV_COMPOSE) down -v

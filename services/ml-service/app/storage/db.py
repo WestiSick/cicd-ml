@@ -40,6 +40,9 @@ def load_jobs_df(dsn: str, repo_ids: list[int] | None = None, since: str | None 
     without a target. The optional repo_ids/since let callers slice for
     train/test splits or per-experiment subsets.
     """
+    # LEFT JOIN commits: collector only fills `commits` for SHAs it
+    # actually fetched, so NULL is normal for older runs predating the
+    # commit-collection rollout. Feature engineering treats NULLs as 0.
     sql = """
         SELECT
             j.id              AS job_id,
@@ -53,15 +56,20 @@ def load_jobs_df(dsn: str, repo_ids: list[int] | None = None, since: str | None 
             w.id              AS run_id,
             w.workflow_name   AS workflow_name,
             w.head_branch     AS head_branch,
+            w.head_sha        AS head_sha,
             w.event           AS event,
             w.actor           AS actor,
             w.created_at      AS run_created_at,
             r.id              AS repo_id,
             r.owner           AS repo_owner,
-            r.name            AS repo_name
+            r.name            AS repo_name,
+            c.files_changed   AS commit_files_changed,
+            c.additions       AS commit_additions,
+            c.deletions       AS commit_deletions
         FROM jobs j
         JOIN workflow_runs w ON j.run_id = w.id
         JOIN repos r         ON w.repo_id = r.id
+        LEFT JOIN commits c  ON w.head_sha = c.sha
         WHERE j.duration_sec IS NOT NULL
           AND j.duration_sec > 0
     """

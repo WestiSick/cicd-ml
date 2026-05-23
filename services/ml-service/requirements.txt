@@ -30,5 +30,12 @@ python-multipart==0.0.20
 httpx==0.28.1
 loguru==0.7.3
 
+# PyTorch CPU-only — used by app/models/lstm.py for the LSTM baseline.
+# The CPU wheel is ~200 MB (vs ~2 GB for the CUDA variant). The thesis
+# scale (≤ low thousands of rows) doesn't need GPU; CPU finishes a
+# 64-hidden LSTM in seconds.
+torch==2.5.1+cpu
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 pytest==8.3.4
 ruff==0.8.4

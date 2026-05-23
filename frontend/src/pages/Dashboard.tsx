@@ -9,7 +9,7 @@ import { StatusChip } from "@/components/StatusChip";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useT } from "@/i18n";
 import { fetchSystemState } from "@/api/system";
-import { formatDuration } from "@/lib/format";
+import { formatDuration, formatSignedPercent } from "@/lib/format";
 
 type QueueEvent = {
   type: string;
@@ -21,6 +21,8 @@ type QueueEvent = {
   conclusion?: string;
   head_sha?: string;
   predicted_sec?: number; // populated by api-gateway via ml-service on workflow_run.requested
+  actual_sec?: number;    // populated on workflow_run.completed (workflow-level updated_at - run_started_at)
+  delta_pct?: number;     // signed Δ% (predicted - actual) / actual · 100 — only on completed with a remembered prediction
   model_algo?: string;
   receivedAt: string;     // client-side
 };
@@ -60,7 +62,9 @@ export function Dashboard() {
       conclusion:    typeof data.conclusion === "string" ? data.conclusion : undefined,
       head_sha:      typeof data.head_sha === "string" ? data.head_sha : undefined,
       predicted_sec: typeof data.predicted_sec === "number" ? data.predicted_sec : undefined,
-      model_algo:    typeof data.model_algo === "string" ? data.model_algo : undefined,
+      actual_sec:    typeof data.actual_sec    === "number" ? data.actual_sec    : undefined,
+      delta_pct:     typeof data.delta_pct     === "number" ? data.delta_pct     : undefined,
+      model_algo:    typeof data.model_algo    === "string" ? data.model_algo    : undefined,
       receivedAt: new Date().toISOString(),
     };
     setEvents((cur) => [ev, ...cur].slice(0, 20));
@@ -160,7 +164,7 @@ function EventRow({ event, fresh }: { event: QueueEvent; fresh: boolean }) {
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "80px 90px 1fr 1fr 90px 80px",
+        gridTemplateColumns: "70px 90px 1fr 1fr 80px 80px 80px 70px",
         alignItems: "center",
         gap: "var(--s-2)",
         padding: "8px 0",
@@ -177,6 +181,8 @@ function EventRow({ event, fresh }: { event: QueueEvent; fresh: boolean }) {
       <span className="mono" style={{ fontSize: "var(--fs-12)", color: "var(--text-secondary)" }}>
         {event.branch ? `${event.branch} · ${(event.head_sha ?? "").slice(0, 7)}` : "—"}
       </span>
+      {/* Predicted column — same accent colour as before so the live
+          forecasting is the visual highlight even when actual is missing. */}
       <span
         className="mono"
         style={{
@@ -184,15 +190,55 @@ function EventRow({ event, fresh }: { event: QueueEvent; fresh: boolean }) {
           color: event.predicted_sec !== undefined ? "var(--accent)" : "var(--text-tertiary)",
           textAlign: "right",
         }}
-        title={event.model_algo ? `predicted by ${event.model_algo}` : undefined}
+        title={event.model_algo ? `predicted by ${event.model_algo}` : "no prediction"}
       >
         {event.predicted_sec !== undefined ? formatDuration(event.predicted_sec) : "—"}
       </span>
-      <span className="mono caps" style={{ fontSize: 11, color: "var(--text-tertiary)" }}>
+      {/* Actual column — populated only on workflow_run.completed. */}
+      <span
+        className="mono"
+        style={{
+          fontSize: "var(--fs-12)",
+          color: event.actual_sec !== undefined ? "var(--text-primary)" : "var(--text-tertiary)",
+          textAlign: "right",
+        }}
+      >
+        {event.actual_sec !== undefined ? formatDuration(event.actual_sec) : "—"}
+      </span>
+      {/* Δ-error column — coloured by accuracy band: green (≤10%), warn
+          (10–30%), err (>30%). Gives an at-a-glance reading of model
+          quality during live demo. */}
+      <span
+        className="mono"
+        style={{
+          fontSize: "var(--fs-12)",
+          color: deltaColor(event.delta_pct),
+          textAlign: "right",
+        }}
+        title="signed prediction error: (predicted − actual) / actual"
+      >
+        {event.delta_pct !== undefined ? formatSignedPercent(event.delta_pct) : "—"}
+      </span>
+      <span className="mono caps" style={{ fontSize: 11, color: "var(--text-tertiary)", textAlign: "right" }}>
         {action}
       </span>
     </div>
   );
+}
+
+// deltaColor maps prediction error to a meaningful palette band:
+//   - ≤10%  → ok green: "model nailed it"
+//   - ≤30%  → warn yellow: "usable but not great"
+//   - >30%  → err red: "poor — investigate this run"
+//
+// Sign doesn't affect colour; only magnitude matters. The user can see
+// the sign from formatSignedPercent's +/− prefix.
+function deltaColor(delta: number | undefined): string {
+  if (delta === undefined) return "var(--text-tertiary)";
+  const abs = Math.abs(delta);
+  if (abs <= 10) return "var(--ok)";
+  if (abs <= 30) return "var(--warn)";
+  return "var(--err)";
 }
 
 const sectionTitleStyle: React.CSSProperties = {

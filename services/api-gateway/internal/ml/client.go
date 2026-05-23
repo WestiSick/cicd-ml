@@ -94,6 +94,36 @@ func (c *Client) TrainOptuna(ctx context.Context, req OptunaRequest) (OptunaResp
 	return resp, nil
 }
 
+// CVRequest matches ml-service POST /train/cv body. Walk-forward
+// time-series CV — no model is persisted, returns per-fold + summary
+// metrics so the UI can show "expected MAE = X ± σ" before the user
+// commits to a full train.
+type CVRequest struct {
+	Algo    string         `json:"algo"`
+	Params  map[string]any `json:"params,omitempty"`
+	RepoIDs []int64        `json:"repo_ids,omitempty"`
+	Since   string         `json:"since,omitempty"`
+	NSplits int            `json:"n_splits"`
+}
+
+type CVResponse struct {
+	Algo           string               `json:"algo"`
+	NSplits        int                  `json:"n_splits"`
+	FoldMetrics    []map[string]float64 `json:"fold_metrics"`
+	MeanMetrics    map[string]float64   `json:"mean_metrics"`
+	StdMetrics     map[string]float64   `json:"std_metrics"`
+	TotalTrainSize int                  `json:"total_train_size"`
+	TotalTestSize  int                  `json:"total_test_size"`
+}
+
+func (c *Client) CrossValidate(ctx context.Context, req CVRequest) (CVResponse, error) {
+	var resp CVResponse
+	if err := c.do(ctx, http.MethodPost, "/train/cv", req, &resp); err != nil {
+		return CVResponse{}, err
+	}
+	return resp, nil
+}
+
 // BuildFeaturesRequest matches ml-service POST /features/build body.
 type BuildFeaturesRequest struct {
 	RepoIDs []int64 `json:"repo_ids,omitempty"`

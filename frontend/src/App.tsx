@@ -8,6 +8,7 @@ import { Dashboard } from "@/pages/Dashboard";
 import { Datasets } from "@/pages/Datasets";
 import { DatasetDetail } from "@/pages/DatasetDetail";
 import { Experiments } from "@/pages/Experiments";
+import { ModelCompare } from "@/pages/ModelCompare";
 import { TrainingDetail } from "@/pages/TrainingDetail";
 import { Simulator } from "@/pages/Simulator";
 import { Admin } from "@/pages/Admin";
@@ -43,6 +44,7 @@ export function App() {
           <Route path="/datasets" element={<Datasets />} />
           <Route path="/datasets/:id" element={<DatasetDetail />} />
           <Route path="/experiments" element={<Experiments />} />
+          <Route path="/experiments/compare" element={<ModelCompare />} />
           <Route path="/experiments/jobs/:id" element={<TrainingDetail />} />
           <Route path="/simulator" element={<Simulator />} />
           <Route path="/admin" element={<Admin />} />

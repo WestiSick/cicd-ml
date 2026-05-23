@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from ..config import load
 from ..training.optuna_search import run_search
-from ..training.pipeline import InsufficientDataError, TrainRequest, train_one
+from ..training.pipeline import InsufficientDataError, TrainRequest, cross_validate, train_one
 from . import errors
 
 router = APIRouter()
@@ -80,6 +80,61 @@ def _top_features(d: dict[str, float], k: int) -> list[dict[str, Any]]:
     later inspection."""
     items = sorted(d.items(), key=lambda kv: kv[1], reverse=True)
     return [{"name": n, "value": float(v)} for n, v in items[:k]]
+
+
+class CVBody(BaseModel):
+    """POST /train/cv — walk-forward cross-validation, no persistence.
+
+    The frontend's /experiments page calls this when the user clicks
+    'Cross-validate' to estimate generalisation before committing to a
+    full training run. Response shape mirrors POST /train but with
+    per-fold + mean + std metric blocks instead of one set.
+    """
+    algo: str = Field(..., description="linear | rf | xgboost | lightgbm | mlp")
+    params: dict[str, Any] = Field(default_factory=dict)
+    repo_ids: list[int] | None = None
+    since: str | None = None
+    n_splits: int = Field(5, ge=2, le=10)
+
+
+@router.post("/cv")
+async def cross_validate_endpoint(body: CVBody) -> dict[str, Any]:
+    s = load()
+    req = TrainRequest(
+        algo=body.algo,
+        params=body.params,
+        repo_ids=body.repo_ids,
+        since=body.since,
+        name=f"{body.algo}-cv",
+        training_job_id=None,
+        activate=False,
+    )
+    try:
+        out = cross_validate(s.postgres_dsn, req, n_splits=body.n_splits)
+    except InsufficientDataError as e:
+        raise errors.APIError(
+            status=422,
+            code="insufficient_data",
+            message=str(e),
+            user_action="Sync more data on /datasets, lower n_splits, or widen the time window.",
+        )
+    except ValueError as e:
+        raise errors.APIError(
+            status=400,
+            code="invalid_algo",
+            message=str(e),
+            user_action="Pick one of linear, rf, xgboost, lightgbm, mlp.",
+        )
+
+    return {
+        "algo":             out.algo,
+        "n_splits":         out.n_splits,
+        "fold_metrics":     out.fold_metrics,
+        "mean_metrics":     out.mean_metrics,
+        "std_metrics":      out.std_metrics,
+        "total_train_size": out.total_train_size,
+        "total_test_size":  out.total_test_size,
+    }
 
 
 class OptunaBody(BaseModel):
