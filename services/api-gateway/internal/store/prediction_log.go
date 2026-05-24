@@ -88,9 +88,9 @@ func (d *DB) InsertPredictionLog(ctx context.Context, p InsertPredictionLogParam
 // errors without scrolling past hundreds of well-predicted rows.
 type ListPredictionLogParams struct {
 	Repo           string    // exact "owner/name" match
-	Since          time.Time // only rows with completed_at >= Since
+	Since          time.Time // only rows with completed_at >= Since (zero = no filter)
 	MinAbsDeltaPct float64   // |delta_pct| filter (0 = disabled)
-	Limit          int       // capped at 500
+	Limit          int       // capped at 2000
 }
 
 // PredictionLogRow — the projection the API returns. Pointer floats
@@ -116,13 +116,15 @@ type PredictionLogRow struct {
 }
 
 // ListPredictionLog returns rows matching the filter, newest first.
-// Hard-capped at 500 — large dumps belong in a CSV export, not the UI.
+// Hard-capped at 2000 — multi-year dumps belong in a CSV export, not
+// the UI, but 2000 covers the full thesis demo window (~1000 synthetic
+// rows + headroom).
 func (d *DB) ListPredictionLog(ctx context.Context, p ListPredictionLogParams) ([]PredictionLogRow, error) {
 	limit := p.Limit
 	if limit <= 0 {
 		limit = 100
-	} else if limit > 500 {
-		limit = 500
+	} else if limit > 2000 {
+		limit = 2000
 	}
 
 	// Build WHERE clause dynamically. Keeping it as a single query

@@ -23,10 +23,19 @@ import { formatDuration } from "@/lib/format";
  * taken at different times.
  */
 
+/* Window presets — `value` is hours.
+ *
+ * "all" maps to 0 which the backend interprets as no time filter
+ * (returns rows newest-first up to `limit`). Used for the thesis
+ * demo's "show me everything since February" view.
+ */
 const HOURS_PRESETS: Array<{ label: string; value: number }> = [
-  { label: "24h", value: 24 },
-  { label: "7d",  value: 168 },
-  { label: "30d", value: 720 },
+  { label: "24h",  value: 24 },
+  { label: "7d",   value: 168 },
+  { label: "30d",  value: 720 },
+  { label: "90d",  value: 2160 },
+  { label: "180d", value: 4320 },
+  { label: "all",  value: 0 },
 ];
 
 const DELTA_PRESETS: Array<{ label: string; value: number }> = [
@@ -115,7 +124,7 @@ export function History() {
             </select>
           </FilterGroup>
           <FilterGroup label={t("history.filter.limit")}>
-            {[50, 100, 200, 500].map((n) => (
+            {[100, 500, 1000, 2000].map((n) => (
               <Pill key={n} active={limit === n} onClick={() => setLimit(n)}>
                 {n}
               </Pill>
@@ -176,7 +185,9 @@ function Row({ row }: { row: HistoryRow }) {
 
   return (
     <tr style={{ borderTop: "1px solid var(--border-subtle)" }}>
-      <Td mono small>{new Date(row.completed_at).toISOString().slice(5, 16).replace("T", " ")}</Td>
+      {/* Full YYYY-MM-DD HH:mm — needed for the thesis windows that
+          stretch across multiple months / years. */}
+      <Td mono small>{new Date(row.completed_at).toISOString().slice(0, 16).replace("T", " ")}</Td>
       <Td mono small>{row.repo}</Td>
       <Td mono small>{row.workflow ?? "—"}</Td>
       <Td mono small>

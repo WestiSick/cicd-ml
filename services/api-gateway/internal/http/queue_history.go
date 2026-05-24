@@ -16,27 +16,27 @@ import (
 // page on the frontend.
 //
 // Filters:
-//   limit          1..500            default 100
+//   limit          1..2000           default 100
 //   repo           "owner/name"      exact match, optional
-//   hours          1..720 (30 days)  default 168 (7 days). 0 = all
+//   hours          1..8760 (1 year)  default 168 (7 days). 0 = all-time
 //   min_abs_delta  0..1000           |delta_pct| floor for "show me the misses"
 //
-// The 30-day ceiling is a guardrail — the JSON response stays under
-// ~200KB even at 500 rows × max-everything, no risk of accidental
-// browser-killing fetches. For longer windows export CSV.
+// The 1-year ceiling is a guardrail — the JSON response can grow to
+// ~600KB at 2000 rows, still well within typical browser fetch limits.
+// For multi-year windows or full dumps use the planned CSV export.
 func (s *Server) queueHistory(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
 	limit := 100
 	if v := q.Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 2000 {
 			limit = n
 		}
 	}
 
 	hours := 168
 	if v := q.Get("hours"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 720 {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 8760 {
 			hours = n
 		}
 	}
