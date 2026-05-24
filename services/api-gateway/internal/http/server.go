@@ -160,6 +160,7 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/simulator/strategies", s.listStrategies)
 		r.Get("/simulator/runs/{id}/export.csv", s.exportSimRunCSV)
 		r.Get("/queue", s.queueSnapshot)
+		r.Get("/queue/history", s.queueHistory)
 		r.Get("/dashboard/load-24h", s.dashboardLoad24h)
 		r.Get("/datasets", s.datasetsSummary)
 		r.Get("/datasets/coverage", s.datasetsCoverage)

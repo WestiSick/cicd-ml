@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
+  History as HistoryIcon,
   Database,
   FlaskConical,
   Activity,
@@ -47,6 +48,7 @@ export function AppShell() {
       <aside className={styles.sidebar}>
         <nav className={styles.nav}>
           <SidebarLink to="/dashboard"   icon={<LayoutDashboard size={14} strokeWidth={1.5} />} label={t("nav.dashboard")} />
+          <SidebarLink to="/history"     icon={<HistoryIcon size={14} strokeWidth={1.5} />}     label={t("nav.history")} />
           <SidebarLink to="/datasets"    icon={<Database size={14} strokeWidth={1.5} />}        label={t("nav.datasets")} />
           <SidebarLink to="/experiments" icon={<FlaskConical size={14} strokeWidth={1.5} />}    label={t("nav.experiments")} />
           <SidebarLink to="/simulator"   icon={<Activity size={14} strokeWidth={1.5} />}        label={t("nav.simulator")} />

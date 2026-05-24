@@ -8,10 +8,36 @@
 export type TranslationKey =
   // navigation
   | "nav.dashboard"
+  | "nav.history"
   | "nav.datasets"
   | "nav.experiments"
   | "nav.simulator"
   | "nav.admin"
+
+  // /history page
+  | "history.title"
+  | "history.subtitle"
+  | "history.kpi.count"
+  | "history.kpi.mean"
+  | "history.kpi.median"
+  | "history.kpi.in20"
+  | "history.filter.window"
+  | "history.filter.delta"
+  | "history.filter.repo"
+  | "history.filter.repo.all"
+  | "history.filter.limit"
+  | "history.col.time"
+  | "history.col.repo"
+  | "history.col.workflow"
+  | "history.col.branch_sha"
+  | "history.col.predicted"
+  | "history.col.actual"
+  | "history.col.delta"
+  | "history.col.calibration"
+  | "history.col.model"
+  | "history.col.conclusion"
+  | "history.empty.title"
+  | "history.empty.hint"
 
   // common buttons / actions
   | "common.cancel"

@@ -5,6 +5,7 @@ import { ApiErrorBoundary } from "@/components/ApiErrorBoundary";
 import { CommandPalette } from "@/components/CommandPalette";
 import { Setup } from "@/pages/Setup";
 import { Dashboard } from "@/pages/Dashboard";
+import { History } from "@/pages/History";
 import { Datasets } from "@/pages/Datasets";
 import { DatasetDetail } from "@/pages/DatasetDetail";
 import { Experiments } from "@/pages/Experiments";
@@ -41,6 +42,7 @@ export function App() {
         <Route element={<AppShell />}>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/history" element={<History />} />
           <Route path="/datasets" element={<Datasets />} />
           <Route path="/datasets/:id" element={<DatasetDetail />} />
           <Route path="/experiments" element={<Experiments />} />

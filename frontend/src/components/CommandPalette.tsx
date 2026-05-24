@@ -62,6 +62,7 @@ export function CommandPalette() {
 
   const commands: Command[] = [
     { id: "go.dashboard",   label: "Go to Dashboard",   hint: "Alt+D · live queue and KPIs",       run: () => navigate("/dashboard") },
+    { id: "go.history",     label: "Go to History",     hint: "persistent predict-vs-actual log",  run: () => navigate("/history") },
     { id: "go.datasets",    label: "Go to Datasets",    hint: "Alt+S · tracked repositories",      run: () => navigate("/datasets") },
     { id: "go.experiments", label: "Go to Experiments", hint: "Alt+E · trained models and runs",   run: () => navigate("/experiments") },
     { id: "go.simulator",   label: "Go to Simulator",   hint: "Alt+I · strategy comparison",       run: () => navigate("/simulator") },

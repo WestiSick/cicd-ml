@@ -201,6 +201,43 @@ func (s *Server) handleGithubWebhook(w http.ResponseWriter, r *http.Request) {
 							}
 						}
 
+						// Persist the (predicted, actual, delta) tuple
+						// for /history. The webhook handler is the only
+						// place that knows what the user actually saw on
+						// the dashboard at .completed time — the
+						// collector's later /predict pass may use a
+						// different model version or different calibration
+						// state, so the rows in `predictions` aren't a
+						// faithful "what was on the dashboard" log.
+						predicted := remembered.PredictedSec
+						predictedRaw := remembered.PredictedRawSec
+						factor := remembered.CalibrationFactor
+						var deltaPctPtr *float64
+						if actualSec > 0 {
+							d := 100.0 * (predicted - actualSec) / actualSec
+							deltaPctPtr = &d
+						}
+						if _, err := s.db.InsertPredictionLog(r.Context(), store.InsertPredictionLogParams{
+							RunID:             head.WorkflowRun.ID,
+							Repo:              head.Repository.FullName,
+							Workflow:          head.WorkflowRun.Name,
+							HeadBranch:        head.WorkflowRun.HeadBranch,
+							HeadSHA:           head.WorkflowRun.HeadSHA,
+							Event:             head.WorkflowRun.Event,
+							Conclusion:        head.WorkflowRun.Conclusion,
+							PredictedSec:      &predicted,
+							PredictedRawSec:   &predictedRaw,
+							CalibrationFactor: &factor,
+							ActualSec:         &actualSec,
+							DeltaPct:          deltaPctPtr,
+							ModelID:           remembered.ModelID,
+							ModelAlgo:         remembered.ModelAlgo,
+							CompletedAt:       *head.WorkflowRun.UpdatedAt,
+						}); err != nil {
+							log.Warn().Err(err).Int64("run_id", head.WorkflowRun.ID).
+								Msg("prediction_log insert failed")
+						}
+
 						s.recentPredictions.Forget(head.Repository.FullName, head.WorkflowRun.ID)
 					}
 				}
