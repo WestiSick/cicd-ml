@@ -14,14 +14,18 @@
 #      santehlavka stays high-error across all epochs (bimodal, not
 #      explainable from commit content) — this is the deliberate
 #      counter-example for Chapter 4.5 "inherent variance".
-#   2. Per-repo behaviour:
-#        gin-gonic/gin    — Build and lint, ~10/day, low variance
-#        twirapp/twir     — Build and lint, ~8/day, low variance
-#        santehlavka      — Deploy via SSH, ~2/day, BIMODAL
+#   2. Per-repo behaviour (author's own + one observed upstream):
+#        santehlavka      — Deploy via SSH, ~3/day, BIMODAL
 #                           (60% warm cache ~22s, 40% cold ~190s)
-#        kvartira-24      — Deploy, ~1/day, model under-predicts
+#        kvartira-24      — Deploy, ~2/day, model under-predicts
 #                           consistently → calibration kicks in
 #        cicd-ml          — ci, ~3/day, model close to truth
+#        cicd             — Deploy via SSH, ~1/day, similar to cicd-ml
+#                           but noisier (smaller dataset)
+#        Teaching-Journal — test, ~1/day, slight OVER-predict bias
+#                           (test caching) → calib 0.88× corrects
+#        twirapp/twir     — Build and lint, ~2/day (low — observed
+#                           upstream, not actively pushed to)
 #
 # Idempotent: synthetic rows use run_id in [9_000_000_000, 9_999_999_999]
 # so they never collide with real GitHub webhook IDs (max int63 ≈ 9.2e18
@@ -62,30 +66,33 @@ run_sql() {
     fi
 }
 
-echo "==> Pre-flight: check required repos exist"
-# We can't proceed without the 5 repos in the `repos` table — calibration
-# rows need real repo_id FKs.
+echo "==> Pre-flight: check which target repos are tracked"
+# Missing repos are skipped (the JOIN in the seed query drops them
+# silently). We only WARN — useful so the script is robust to "I added
+# 4 of 6 repos and want to demo what I have". The check just tells the
+# operator which slots will be empty in the resulting demo.
 PRE_CHECK=$(cat <<'SQL'
 SELECT
-  count(*) FILTER (WHERE owner='twirapp'   AND name='twir'),
-  count(*) FILTER (WHERE owner='gin-gonic' AND name='gin'),
-  count(*) FILTER (WHERE owner='WestiSick' AND name='santehlavka'),
-  count(*) FILTER (WHERE owner='WestiSick' AND name='kvartira-24'),
-  count(*) FILTER (WHERE owner='WestiSick' AND name='cicd-ml')
+  count(*) FILTER (WHERE owner='WestiSick' AND name='santehlavka')      AS santehlavka,
+  count(*) FILTER (WHERE owner='WestiSick' AND name='kvartira-24')      AS kvartira_24,
+  count(*) FILTER (WHERE owner='WestiSick' AND name='cicd-ml')          AS cicd_ml,
+  count(*) FILTER (WHERE owner='WestiSick' AND name='cicd')             AS cicd,
+  count(*) FILTER (WHERE owner='WestiSick' AND name='Teaching-Journal') AS teaching_journal,
+  count(*) FILTER (WHERE owner='twirapp'   AND name='twir')             AS twir
 FROM repos;
 SQL
 )
 if [[ "$DRY_RUN" != "1" ]]; then
     # shellcheck disable=SC2086
     OUT=$(echo "$PRE_CHECK" | docker compose $COMPOSE_FILES exec -T db psql -U cicdml -d cicdml -tA)
-    IFS='|' read -r t g s k c <<< "$OUT"
-    if [[ "$t" != "1" || "$g" != "1" || "$s" != "1" || "$k" != "1" || "$c" != "1" ]]; then
-        echo "ERROR: not all required repos present in DB."
-        echo "Got: twir=$t  gin=$g  santehlavka=$s  kvartira-24=$k  cicd-ml=$c"
-        echo "Add the missing ones via /datasets in the UI, then re-run."
+    IFS='|' read -r r_santehlavka r_kvartira r_cicdml r_cicd r_teaching r_twir <<< "$OUT"
+    total=$((r_santehlavka + r_kvartira + r_cicdml + r_cicd + r_teaching + r_twir))
+    echo "  santehlavka=$r_santehlavka  kvartira-24=$r_kvartira  cicd-ml=$r_cicdml  cicd=$r_cicd  Teaching-Journal=$r_teaching  twir=$r_twir  (total=$total/6)"
+    if [[ "$total" -lt 3 ]]; then
+        echo "ERROR: fewer than 3 target repos present — demo would look empty."
+        echo "Add them via /datasets in the UI, then re-run."
         exit 1
     fi
-    echo "  all 5 repos found"
 fi
 
 echo "==> Wiping previous synthetic seed (run_id >= 9000000000)"
@@ -123,13 +130,15 @@ SEED_SQL=$(cat <<'SQL'
 SELECT setseed(0.42);
 
 WITH
-  -- 5 repos with their characteristic workflow and events-per-day rate.
+  -- Author's own repos + one upstream OSS (twir) with very low rate
+  -- — emulates "I track it but don't push there myself".
   repo_cfg(slug, workflow, per_day) AS (VALUES
-    ('twirapp/twir',          'Build and lint',  8),
-    ('gin-gonic/gin',         'Build and lint',  10),
-    ('WestiSick/santehlavka', 'Deploy via SSH',  2),
-    ('WestiSick/kvartira-24', 'Deploy',          1),
-    ('WestiSick/cicd-ml',     'ci',              3)
+    ('WestiSick/santehlavka',      'Deploy via SSH',    3),
+    ('WestiSick/kvartira-24',      'Deploy',            2),
+    ('WestiSick/cicd-ml',          'ci',                3),
+    ('WestiSick/cicd',             'Deploy via SSH',    1),
+    ('WestiSick/Teaching-Journal', 'test',              1),
+    ('twirapp/twir',               'Build and lint',    2)
   ),
   -- One row per day in the demo window.
   days AS (
@@ -174,15 +183,19 @@ WITH
       s.*,
       CASE
         WHEN repo = 'WestiSick/santehlavka' AND u_actual < 0.60
-          THEN 18 + random() * 8          -- warm cache ~22s
+          THEN 18 + random() * 8           -- warm cache ~22s
         WHEN repo = 'WestiSick/santehlavka'
-          THEN 165 + random() * 50        -- cold/rebuild ~190s
-        WHEN repo IN ('gin-gonic/gin', 'twirapp/twir')
-          THEN 55 + random() * 30          -- ~60-85s, tight
+          THEN 165 + random() * 50         -- cold/rebuild ~190s
+        WHEN repo = 'twirapp/twir'
+          THEN 55 + random() * 30          -- ~60-85s, mainstream build, tight
         WHEN repo = 'WestiSick/kvartira-24'
-          THEN 75 + random() * 40          -- ~95s ± 20
+          THEN 75 + random() * 40          -- ~95s ± 20, deploy
         WHEN repo = 'WestiSick/cicd-ml'
           THEN 25 + random() * 15          -- ~32s, very tight
+        WHEN repo = 'WestiSick/cicd'
+          THEN 38 + random() * 20          -- ~48s, lightweight deploy
+        WHEN repo = 'WestiSick/Teaching-Journal'
+          THEN 42 + random() * 18          -- ~50s, test suite
         ELSE 30 + random() * 20
       END AS actual_sec
     FROM shaped s
@@ -199,9 +212,11 @@ WITH
         WHEN repo = 'WestiSick/santehlavka' THEN
           -- All epochs: predicts near the mean (~90s, between warm and cold)
           -- because commit content can't disambiguate the regime.
+          -- This is the deliberate counter-example for Chapter 4.5.
           80 + (u_noise_pred - 0.5) * (CASE epoch WHEN 'v1' THEN 40 WHEN 'v2' THEN 25 ELSE 15 END)
-        WHEN repo IN ('gin-gonic/gin', 'twirapp/twir') THEN
-          -- Predict close to actual with epoch-shrinking noise.
+        WHEN repo = 'twirapp/twir' THEN
+          -- Mainstream OSS build: model is well-calibrated, predicts
+          -- close to actual with epoch-shrinking noise.
           actual_sec * (1 + (u_noise_pred - 0.5) * (CASE epoch WHEN 'v1' THEN 0.50 WHEN 'v2' THEN 0.25 ELSE 0.15 END))
         WHEN repo = 'WestiSick/kvartira-24' THEN
           -- Persistent under-predict bias in the raw model (commit
@@ -212,7 +227,16 @@ WITH
           -- value vs feature engineering alone.
           65 + (u_noise_pred - 0.5) * (CASE epoch WHEN 'v1' THEN 35 WHEN 'v2' THEN 22 ELSE 15 END)
         WHEN repo = 'WestiSick/cicd-ml' THEN
+          -- Tight predictions, model is unbiased.
           actual_sec * (1 + (u_noise_pred - 0.5) * (CASE epoch WHEN 'v1' THEN 0.40 WHEN 'v2' THEN 0.20 ELSE 0.10 END))
+        WHEN repo = 'WestiSick/cicd' THEN
+          -- Similar to cicd-ml but slightly noisier (smaller dataset).
+          actual_sec * (1 + (u_noise_pred - 0.5) * (CASE epoch WHEN 'v1' THEN 0.50 WHEN 'v2' THEN 0.30 ELSE 0.18 END))
+        WHEN repo = 'WestiSick/Teaching-Journal' THEN
+          -- Slight over-predict bias the model never quite fixes (test
+          -- suite caching), v3 calibration brings it down to ~5%.
+          actual_sec * (CASE epoch WHEN 'v1' THEN 1.25 WHEN 'v2' THEN 1.15 ELSE 1.10 END
+                        + (u_noise_pred - 0.5) * (CASE epoch WHEN 'v1' THEN 0.40 WHEN 'v2' THEN 0.25 ELSE 0.15 END))
         ELSE actual_sec
       END AS predicted_raw_sec
     FROM with_actual a
@@ -225,11 +249,12 @@ WITH
       p.*,
       CASE
         WHEN epoch != 'v3' THEN 1.0
-        WHEN repo = 'WestiSick/santehlavka' THEN 1.05   -- bimodal: factor doesn't help much
-        WHEN repo = 'WestiSick/kvartira-24' THEN 1.40   -- under-predict bias, calib fixes
-        WHEN repo = 'WestiSick/cicd-ml'     THEN 1.02
-        WHEN repo = 'twirapp/twir'          THEN 0.95
-        WHEN repo = 'gin-gonic/gin'         THEN 1.02
+        WHEN repo = 'WestiSick/santehlavka'      THEN 1.05   -- bimodal: factor doesn't help much
+        WHEN repo = 'WestiSick/kvartira-24'      THEN 1.40   -- under-predict bias, calib fixes
+        WHEN repo = 'WestiSick/cicd-ml'          THEN 1.02
+        WHEN repo = 'WestiSick/cicd'             THEN 1.05
+        WHEN repo = 'WestiSick/Teaching-Journal' THEN 0.88   -- over-predict bias, calib brings down
+        WHEN repo = 'twirapp/twir'               THEN 0.97
         ELSE 1.0
       END AS calibration_factor
     FROM with_pred p
@@ -295,11 +320,12 @@ CALIB_SQL=$(cat <<'SQL'
 DELETE FROM repo_calibration WHERE repo_id IN (
   SELECT id FROM repos WHERE
     (owner, name) IN (
-      ('twirapp','twir'),
-      ('gin-gonic','gin'),
       ('WestiSick','santehlavka'),
       ('WestiSick','kvartira-24'),
-      ('WestiSick','cicd-ml')
+      ('WestiSick','cicd-ml'),
+      ('WestiSick','cicd'),
+      ('WestiSick','Teaching-Journal'),
+      ('twirapp','twir')
     )
 );
 
@@ -311,11 +337,15 @@ SELECT r.id, v.workflow, v.factor, v.n_obs,
        v.last_actual, v.last_pred, v.last_actual / NULLIF(v.last_pred, 0),
        v.updated_at
 FROM (VALUES
-  ('twirapp',   'twir',         'Build and lint', 0.95,  680, 68.0,  72.0, '2026-05-22 18:30:00'::timestamptz),
-  ('gin-gonic', 'gin',          'Build and lint', 1.02,  890, 72.0,  70.5, '2026-05-22 19:15:00'::timestamptz),
-  ('WestiSick', 'santehlavka',  'Deploy via SSH', 1.05,  85,  198.0, 188.0,'2026-05-22 17:26:00'::timestamptz),
-  ('WestiSick', 'kvartira-24',  'Deploy',         1.40,  42,  95.0,  68.0, '2026-05-22 16:45:00'::timestamptz),
-  ('WestiSick', 'cicd-ml',      'ci',             1.02,  72,  32.0,  31.5, '2026-05-22 20:10:00'::timestamptz)
+  -- Author-owned repos (the ones the system actually adapts to):
+  ('WestiSick', 'santehlavka',      'Deploy via SSH', 1.05,  85,  198.0, 188.0, '2026-05-22 17:26:00'::timestamptz),
+  ('WestiSick', 'kvartira-24',      'Deploy',         1.40,  42,  95.0,  68.0,  '2026-05-22 16:45:00'::timestamptz),
+  ('WestiSick', 'cicd-ml',          'ci',             1.02,  72,  32.0,  31.5,  '2026-05-22 20:10:00'::timestamptz),
+  ('WestiSick', 'cicd',             'Deploy via SSH', 1.05,  18,  48.0,  46.0,  '2026-05-22 18:55:00'::timestamptz),
+  ('WestiSick', 'Teaching-Journal', 'test',           0.88,  24,  50.0,  57.0,  '2026-05-22 19:40:00'::timestamptz),
+  -- One observed upstream OSS repo — low traffic, the system still
+  -- learns a small bias.
+  ('twirapp',   'twir',             'Build and lint', 0.97, 180,  68.0,  70.0,  '2026-05-22 18:30:00'::timestamptz)
 ) AS v(owner, name, workflow, factor, n_obs, last_actual, last_pred, updated_at)
 JOIN repos r ON r.owner = v.owner AND r.name = v.name;
 
@@ -364,12 +394,13 @@ echo "bimodal δ pattern (warm: large positive δ, cold: large negative)"
 echo "that does NOT improve across epochs, proving the limit of"
 echo "commit-content features."
 echo
-echo "/admin → Калибровка should show 5 rows, sorted by |1 − factor| desc:"
-echo "  WestiSick/kvartira-24 · Deploy         1.40×   42 obs   (model under-predicts)"
-echo "  WestiSick/santehlavka · Deploy via SSH 1.05×   85 obs   (bimodal, calib limited)"
-echo "  WestiSick/cicd-ml     · ci             1.02×   72 obs"
-echo "  gin-gonic/gin         · Build and lint 1.02×   890 obs  (well-calibrated)"
-echo "  twirapp/twir          · Build and lint 0.95×   680 obs  (slight over-predict)"
+echo "/admin → Калибровка should show 6 rows, sorted by |1 − factor| desc:"
+echo "  WestiSick/kvartira-24      · Deploy         1.40×   42 obs   ← calibration star: model under-predicts, calib fixes"
+echo "  WestiSick/Teaching-Journal · test           0.88×   24 obs   ← opposite direction: over-predict, calib brings down"
+echo "  WestiSick/santehlavka      · Deploy via SSH 1.05×   85 obs   ← bimodal, calib limited (Chapter 4.5 example)"
+echo "  WestiSick/cicd             · Deploy via SSH 1.05×   18 obs"
+echo "  WestiSick/cicd-ml          · ci             1.02×   72 obs"
+echo "  twirapp/twir               · Build and lint 0.97×  180 obs   ← observed upstream, low traffic"
 echo
 echo "To wipe synthetic data: docker compose ... exec -T db psql -U cicdml -d cicdml -c \\"
 echo "    'DELETE FROM prediction_log WHERE run_id >= 9000000000;'"
